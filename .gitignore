@@ -2,7 +2,6 @@ node_modules/
 dist/
 target/
 src-tauri/target/
-src-tauri/icons/
 *.log
 .env
 .env.*
@@ -13,3 +12,4 @@ src-tauri/icons/
 *.key
 *.pem
 src-tauri/gen/schemas/
+release/

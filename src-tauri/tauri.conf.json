@@ -17,11 +17,12 @@
         "height": 800,
         "minWidth": 850,
         "minHeight": 600,
-        "backgroundColor": "#101723"
+        "backgroundColor": "#101723",
+        "label": "main"
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; img-src 'self' data: asset: https:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost; font-src 'self' data:"
     }
   },
   "bundle": {
@@ -37,8 +38,20 @@
     ],
     "windows": {
       "nsis": {
-        "displayLanguageSelector": false
+        "displayLanguageSelector": false,
+        "languages": [
+          "Korean",
+          "English"
+        ],
+        "installMode": "currentUser"
+      },
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
       }
-    }
+    },
+    "publisher": "sopo9880",
+    "shortDescription": "Canvas LMS 학습 비서",
+    "longDescription": "Canvas LMS와 Codex를 연결한 Windows 개인 학습 비서"
   }
 }

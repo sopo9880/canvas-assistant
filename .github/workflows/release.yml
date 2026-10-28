@@ -1,0 +1,54 @@
+name: Release
+# Builds the Windows installer on a GitHub Windows runner and publishes a release.
+# Manual only while the repository is private. Releases can also be built on Linux
+# with scripts/build-windows-on-linux.sh and uploaded with `gh release create`.
+on:
+  workflow_dispatch:
+    inputs:
+      prerelease:
+        description: "Mark as pre-release"
+        type: boolean
+        default: true
+permissions:
+  contents: write
+concurrency:
+  group: release
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci --no-audit --no-fund
+      - run: npm test
+      - run: npx tauri build --bundles nsis
+      - name: Collect installer and checksums
+        shell: pwsh
+        run: |
+          $ver = node -p "require('./package.json').version"
+          New-Item -ItemType Directory -Force release | Out-Null
+          $src = Get-ChildItem src-tauri/target/release/bundle/nsis -Filter *-setup.exe | Select-Object -First 1
+          $dst = "release/CanvasAssistant-$ver-x64-setup.exe"
+          Copy-Item $src.FullName $dst
+          Get-ChildItem release -File -Filter *.exe | ForEach-Object {
+            "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)"
+          } | Out-File -Encoding ascii release/SHA256SUMS.txt
+          Get-Content release/SHA256SUMS.txt
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VER="v$(node -p "require('./package.json').version")"
+          FLAGS=""
+          if [ "${{ inputs.prerelease }}" = "true" ] || [[ "$VER" == *-* ]]; then FLAGS="--prerelease"; fi
+          gh release create "$VER" release/* --target "$GITHUB_SHA" --title "Canvas Assistant $VER" --notes-file RELEASE_NOTES.md $FLAGS
