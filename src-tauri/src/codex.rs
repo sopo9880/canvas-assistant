@@ -481,6 +481,49 @@ impl CodexState {
         self.request_raw(method, safe, timeout)
     }
 
+    /// Starts an ephemeral thread with the Canvas tools, reports their startup status and
+    /// calls `canvas_profile` once. Nothing is sent to the model.
+    pub fn diagnose(&self, app: &AppHandle) -> Result<Value, String> {
+        self.start(app)?;
+        let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+        let workspace = workspace_dir(app)?.to_string_lossy().into_owned();
+        let mcp = canvas_mcp_config(app)?;
+        let mut params = validated_request("thread/start", &json!({"ephemeral": true}), &workspace, Some(&mcp))?;
+        params["ephemeral"] = json!(true);
+        let started = self.request_raw("thread/start", params, Duration::from_secs(60))?;
+        let thread_id = started.pointer("/thread/id").and_then(Value::as_str).ok_or("Codex가 대화 ID를 주지 않았습니다")?.to_string();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut server = Value::Null;
+        while Instant::now() < deadline {
+            let list = self.request_raw("mcpServerStatus/list", json!({"threadId": thread_id, "serverName": "canvas"}), Duration::from_secs(30))?;
+            server = list.pointer("/data/0").cloned().unwrap_or(Value::Null);
+            let status = server.get("runtimeStatus").and_then(Value::as_str).unwrap_or("");
+            if status != "starting" && !status.is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(700));
+        }
+        let tools = server.get("tools").and_then(Value::as_object).map(|t| t.len()).unwrap_or(0);
+        let call = if tools > 0 {
+            self.request_raw("mcpServer/tool/call", json!({"threadId": thread_id, "server": "canvas", "tool": "canvas_profile", "arguments": {}}), Duration::from_secs(60))
+                .map(|r| json!({"isError": r.get("isError"), "text": r.pointer("/content/0/text").and_then(Value::as_str).map(|t| t.chars().take(400).collect::<String>())}))
+                .unwrap_or_else(|e| json!({"isError": true, "text": e}))
+        } else {
+            Value::Null
+        };
+        Ok(json!({
+            "canvasToolsInChat": config::load(&data_dir).canvas_tools_in_chat,
+            "canvasConfigured": config::load(&data_dir).canvas_base_url.is_some() && config::get_token().is_some(),
+            "server": {
+                "status": server.get("runtimeStatus"),
+                "error": server.get("toolsError").or_else(|| server.get("error")),
+                "tools": tools,
+            },
+            "profileCall": call,
+            "helper": std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(),
+        }))
+    }
+
     /// Runs one prompt in an ephemeral thread and returns the final answer.
     /// Used by scheduled AI briefings; nothing is shown in the chat list.
     pub fn run_prompt(&self, app: &AppHandle, prompt: &str, max_wait: Duration) -> Result<String, String> {

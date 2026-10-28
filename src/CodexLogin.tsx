@@ -2,6 +2,20 @@ import { useState } from "react";
 import { useApp } from "./App";
 import { Banner, open, Spinner } from "./components";
 
+function CopyLink({ url }: { url?: string }) {
+  const [copied, setCopied] = useState(false);
+  if (!url) return null;
+  return (
+    <div className="copy-link">
+      <div className="muted small">브라우저가 열리지 않았다면 이 주소를 복사해 브라우저에 붙여넣으세요. 로그인이 끝나면 앱이 자동으로 연결됩니다.</div>
+      <div className="row">
+        <input readOnly value={url} onFocus={(e) => e.currentTarget.select()} aria-label="로그인 주소" />
+        <button onClick={() => void navigator.clipboard?.writeText(url).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); })}>{copied ? "복사됨 ✓" : "주소 복사"}</button>
+      </div>
+    </div>
+  );
+}
+
 /** ChatGPT sign-in for the bundled Codex. Used on the chat screen and in Settings. */
 export default function CodexLogin({ compact = false }: { compact?: boolean }) {
   const { codex, login, loginError, startLogin, cancelLogin, connectCodex, refreshAccount } = useApp();
@@ -35,7 +49,7 @@ export default function CodexLogin({ compact = false }: { compact?: boolean }) {
             <button onClick={() => open(login.authUrl)}>로그인 페이지 다시 열기</button>
             <button className="ghost" onClick={() => void cancelLogin()}>취소</button>
           </div>
-          <p className="muted small">브라우저가 열리지 않거나 로그인 후에도 연결되지 않으면 취소하고 '기기 코드로 로그인'을 사용하세요.</p>
+          <CopyLink url={login.authUrl} />
         </div>
       )}
 
@@ -52,6 +66,7 @@ export default function CodexLogin({ compact = false }: { compact?: boolean }) {
             <button className="primary" onClick={() => open(login.verificationUrl)}>로그인 페이지 열기</button>
             <button className="ghost" onClick={() => void cancelLogin()}>취소</button>
           </div>
+          {login.openFailed && <CopyLink url={login.verificationUrl} />}
           <Spinner label="코드 입력을 기다리는 중…" />
         </div>
       )}
