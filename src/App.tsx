@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openExternal } from "./components";
 import { api, AppInfo, errorText } from "./api";
 import Chat from "./views/Chat";
 import CanvasView from "./views/Canvas";
@@ -22,6 +22,7 @@ export type LoginState = {
   authUrl?: string;
   userCode?: string;
   verificationUrl?: string;
+  openFailed?: boolean;
 } | null;
 
 type Ctx = {
@@ -123,7 +124,10 @@ export default function App() {
       const next: LoginState = { mode, loginId: r.loginId, authUrl: r.authUrl, userCode: r.userCode, verificationUrl: r.verificationUrl };
       setLogin(next);
       const url = mode === "browser" ? r.authUrl : r.verificationUrl;
-      if (url && /^https:\/\/(auth\.openai\.com|chatgpt\.com)\//.test(url)) await openUrl(url);
+      if (url) {
+        // If the browser cannot be opened, the login panel shows the link to copy instead.
+        try { await openExternal(url); } catch { setLogin({ ...next, openFailed: true }); }
+      }
     } catch (e) {
       setLoginError(errorText(e));
     }

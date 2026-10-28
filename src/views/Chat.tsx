@@ -142,6 +142,11 @@ export default function Chat({ prefill }: { prefill: { text: string; n: number }
           void refreshInfo();
           break;
         }
+        case "mcpServer/startupStatus/updated":
+          if (params?.name === "canvas" && (params?.status === "failed" || params?.error)) {
+            setError(`Canvas 도구를 시작하지 못했습니다: ${params?.error ?? params?.failureReason ?? params?.status}. 설정 → 'AI의 Canvas 도구 점검'으로 확인하세요.`);
+          }
+          break;
         case "error":
           if (!params?.willRetry) setError(params?.error?.message ?? "Codex 오류가 발생했습니다.");
           break;

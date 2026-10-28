@@ -309,6 +309,24 @@ async fn briefings_list(state: Shared<'_>) -> Result<Vec<Value>, String> {
     blocking(move || s.db.lock().map_err(|_| "db busy".to_string())?.briefings()).await
 }
 
+/// Opens an http(s) link in the default browser. The WebView has no opener permission;
+/// every external link goes through this check.
+#[tauri::command]
+fn open_external(app: AppHandle, url: String) -> Result<(), String> {
+    let parsed = url::Url::parse(url.trim()).map_err(|_| "올바른 주소가 아닙니다".to_string())?;
+    if !matches!(parsed.scheme(), "https" | "http") || parsed.host_str().is_none() {
+        return Err("http(s) 주소만 열 수 있습니다".into());
+    }
+    app.opener().open_url(parsed.as_str(), None::<&str>).map_err(|e| format!("브라우저를 열 수 없습니다: {e}"))
+}
+
+/// Checks that Codex can start the Canvas tools and call one, for troubleshooting.
+#[tauri::command]
+async fn codex_diagnose(app: AppHandle, state: Shared<'_>) -> Result<Value, String> {
+    let s = state.inner().clone();
+    blocking(move || s.codex.diagnose(&app)).await
+}
+
 // ---------------- Codex ----------------
 
 #[tauri::command]
@@ -428,7 +446,7 @@ pub fn run() {
             canvas_connect, canvas_disconnect, canvas_query, canvas_download,
             pending_list, pending_decide, audit_list,
             jobs_list, jobs_update, jobs_run_now, briefings_list,
-            codex_start, codex_call, codex_locate
+            codex_start, codex_call, codex_locate, codex_diagnose, open_external
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Canvas Assistant")

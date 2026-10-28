@@ -17,6 +17,7 @@ export default function SettingsView() {
   const [autostart, setAutostart] = useState<boolean | null>(null);
   const [msg, setMsg] = useState<{ tone: "ok" | "error" | "info"; text: string } | null>(null);
   const [update, setUpdate] = useState<any>(null);
+  const [diag, setDiag] = useState<any>(null);
 
   useEffect(() => { setBaseUrl(s?.canvasBaseUrl ?? ""); setCodexPath(s?.codexPath ?? ""); }, [s?.canvasBaseUrl, s?.codexPath]);
   useEffect(() => {
@@ -121,6 +122,21 @@ export default function SettingsView() {
           ) : (
             <CodexLogin />
           )}
+          <div className="row">
+            <button disabled={!codex.account || diag?.loading} onClick={async () => {
+              setDiag({ loading: true });
+              try { setDiag(await api.diagnose()); } catch (e) { setDiag({ error: errorText(e) }); }
+            }}>AI의 Canvas 도구 점검</button>
+            {diag?.loading && <Spinner label="점검 중 (최대 1분)…" />}
+          </div>
+          {diag && !diag.loading && (diag.error ? <Banner>{diag.error}</Banner> : (
+            <div className="kv diag">
+              <span>Canvas 연결</span><span>{diag.canvasConfigured ? "✓ 설정됨" : "✗ 설정 안 됨 — 위에서 Canvas 주소와 토큰을 입력하세요"}</span>
+              <span>대화에서 사용</span><span>{diag.canvasToolsInChat ? "✓ 켜짐" : "✗ 꺼짐"}</span>
+              <span>도구 서버</span><span>{diag.server?.status === "connected" ? `✓ 연결됨 (도구 ${diag.server.tools}개)` : `✗ ${diag.server?.status ?? "응답 없음"}${diag.server?.error ? ` — ${typeof diag.server.error === "string" ? diag.server.error : JSON.stringify(diag.server.error)}` : ""}`}</span>
+              <span>시험 호출</span><span className="break">{diag.profileCall ? (diag.profileCall.isError ? `✗ ${diag.profileCall.text}` : "✓ Canvas 프로필 조회 성공") : "—"}</span>
+            </div>
+          ))}
           <p className="muted small">AI는 앱에 포함된 Codex로 읽기 전용 실행됩니다. 명령 실행, 파일 수정, 웹 검색은 꺼져 있고 Canvas 도구만 사용합니다.</p>
           <details className="advanced">
             <summary>고급: Codex 실행 파일</summary>
