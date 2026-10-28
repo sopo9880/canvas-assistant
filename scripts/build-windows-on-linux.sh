@@ -49,7 +49,9 @@ export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc
 export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_AR=x86_64-w64-mingw32-ar
 
 npm ci --no-audit --no-fund
+node scripts/fetch-codex.mjs
 npm test
+rm -rf "src-tauri/target/$TARGET/release/bundle" release
 npx tauri build --target "$TARGET" --bundles nsis
 
 VERSION="$(node -p "require('./package.json').version")"

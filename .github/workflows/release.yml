@@ -29,6 +29,7 @@ jobs:
         with:
           workspaces: src-tauri
       - run: npm ci --no-audit --no-fund
+      - run: node scripts/fetch-codex.mjs
       - run: npm test
       - run: npx tauri build --bundles nsis
       - name: Collect installer and checksums

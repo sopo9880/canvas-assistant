@@ -3,6 +3,7 @@ import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { api, errorText } from "../api";
 import { useApp } from "../App";
 import { Banner, open, Spinner, Toggle } from "../components";
+import CodexLogin from "../CodexLogin";
 
 export default function SettingsView() {
   const { info, refreshInfo, codex, connectCodex, refreshAccount } = useApp();
@@ -12,10 +13,11 @@ export default function SettingsView() {
   const [connecting, setConnecting] = useState(false);
   const [canvasMsg, setCanvasMsg] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   const [codexPath, setCodexPath] = useState(s?.codexPath ?? "");
-  const [located, setLocated] = useState<{ found: boolean; path?: string; error?: string } | null>(null);
+  const [located, setLocated] = useState<{ found: boolean; path?: string; error?: string; source?: string } | null>(null);
   const [autostart, setAutostart] = useState<boolean | null>(null);
   const [msg, setMsg] = useState<{ tone: "ok" | "error" | "info"; text: string } | null>(null);
   const [update, setUpdate] = useState<any>(null);
+  const [diag, setDiag] = useState<any>(null);
 
   useEffect(() => { setBaseUrl(s?.canvasBaseUrl ?? ""); setCodexPath(s?.codexPath ?? ""); }, [s?.canvasBaseUrl, s?.codexPath]);
   useEffect(() => {
@@ -105,24 +107,50 @@ export default function SettingsView() {
         </section>
 
         <section className="card">
-          <h2>🤖 Codex (ChatGPT)</h2>
-          <div className="kv">
-            <span>상태</span>
-            <span>{codex.state === "starting" ? <Spinner label="연결 중" /> : codex.state === "error" ? <span className="error-text">{codex.error}</span> : codex.account ? `로그인됨 — ${codex.account.email ?? codex.account.type}${codex.account.planType ? ` (${codex.account.planType})` : ""}` : "로그인 필요 (AI 대화 화면에서 로그인)"}</span>
-            <span>Codex CLI</span>
-            <span className="break">{located ? (located.found ? located.path : <span className="error-text">{located.error}</span>) : "확인 중…"}</span>
-          </div>
+          <h2>🤖 ChatGPT 계정 (Codex)</h2>
+          {codex.account ? (
+            <>
+              <div className="kv">
+                <span>상태</span>
+                <span>로그인됨 — {codex.account.email ?? codex.account.type}{codex.account.planType ? ` (${codex.account.planType})` : ""}</span>
+              </div>
+              <div className="row">
+                <button onClick={() => void logout()}>로그아웃</button>
+                <button className="ghost" onClick={() => void connectCodex()}>다시 연결</button>
+              </div>
+            </>
+          ) : (
+            <CodexLogin />
+          )}
           <div className="row">
-            <button onClick={() => void connectCodex()}>다시 연결</button>
-            {codex.account && <button onClick={() => void logout()}>로그아웃</button>}
+            <button disabled={!codex.account || diag?.loading} onClick={async () => {
+              setDiag({ loading: true });
+              try { setDiag(await api.diagnose()); } catch (e) { setDiag({ error: errorText(e) }); }
+            }}>AI의 Canvas 도구 점검</button>
+            {diag?.loading && <Spinner label="점검 중 (최대 1분)…" />}
           </div>
-          <form className="form-grid" onSubmit={(e) => { e.preventDefault(); void saveCodexPath(); }}>
-            <label className="span-2">codex.exe 경로 (자동으로 찾지 못할 때만)
-              <input value={codexPath} onChange={(e) => setCodexPath(e.target.value)} placeholder="C:\...\codex.exe" spellCheck={false} />
-            </label>
-            <div className="span-2 row end"><button type="submit">경로 저장</button></div>
-          </form>
-          <p className="muted small">Codex CLI가 없다면 Node.js를 설치한 뒤 PowerShell에서 <code>npm install -g @openai/codex</code>를 실행하세요. AI는 읽기 전용으로만 실행되며 PC의 파일이나 명령에 접근하지 않습니다.</p>
+          {diag && !diag.loading && (diag.error ? <Banner>{diag.error}</Banner> : (
+            <div className="kv diag">
+              <span>Canvas 연결</span><span>{diag.canvasConfigured ? "✓ 설정됨" : "✗ 설정 안 됨 — 위에서 Canvas 주소와 토큰을 입력하세요"}</span>
+              <span>대화에서 사용</span><span>{diag.canvasToolsInChat ? "✓ 켜짐" : "✗ 꺼짐"}</span>
+              <span>도구 서버</span><span>{diag.server?.status === "connected" ? `✓ 연결됨 (도구 ${diag.server.tools}개)` : `✗ ${diag.server?.status ?? "응답 없음"}${diag.server?.error ? ` — ${typeof diag.server.error === "string" ? diag.server.error : JSON.stringify(diag.server.error)}` : ""}`}</span>
+              <span>시험 호출</span><span className="break">{diag.profileCall ? (diag.profileCall.isError ? `✗ ${diag.profileCall.text}` : "✓ Canvas 프로필 조회 성공") : "—"}</span>
+            </div>
+          ))}
+          <p className="muted small">AI는 앱에 포함된 Codex로 읽기 전용 실행됩니다. 명령 실행, 파일 수정, 웹 검색은 꺼져 있고 Canvas 도구만 사용합니다.</p>
+          <details className="advanced">
+            <summary>고급: Codex 실행 파일</summary>
+            <div className="kv">
+              <span>사용 중</span>
+              <span className="break">{located ? (located.found ? `${located.source === "bundled" ? "앱에 포함된 Codex" : located.source === "custom" ? "직접 지정한 경로" : "PC에 설치된 Codex"} — ${located.path}` : <span className="error-text">{located.error}</span>) : "확인 중…"}</span>
+            </div>
+            <form className="form-grid" onSubmit={(e) => { e.preventDefault(); void saveCodexPath(); }}>
+              <label className="span-2">다른 codex.exe 사용 (비워 두면 앱에 포함된 Codex 사용)
+                <input value={codexPath} onChange={(e) => setCodexPath(e.target.value)} placeholder="C:\...\codex.exe" spellCheck={false} />
+              </label>
+              <div className="span-2 row end"><button type="submit">저장</button></div>
+            </form>
+          </details>
         </section>
 
         <section className="card">

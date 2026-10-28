@@ -261,3 +261,9 @@ nav { display: grid; gap: 2px; }
 @keyframes blink { 50% { opacity: 0; } }
 @keyframes pulse { to { opacity: 0.3; } }
 @media (prefers-reduced-motion: reduce) { .spinner, .cursor, .dot.idle { animation: none; } }
+.login-box { display: grid; gap: 12px; }
+.advanced { border-top: 1px solid var(--line); padding-top: 10px; }
+.advanced summary { cursor: pointer; color: var(--muted); }
+.advanced[open] > * + * { margin-top: 10px; }
+.copy-link { display: grid; gap: 6px; width: 100%; }
+.copy-link .row input { flex: 1; font-size: 12px; }

@@ -73,6 +73,35 @@ fn answer_server_request(id: &Value, method: &str) -> Value {
 
 /// Locates the Codex executable. npm installs `codex.cmd`, which Rust cannot spawn
 /// directly, so the native binary inside the npm package is preferred.
+/// Where the Codex executable came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CodexSource {
+    Custom,
+    Bundled,
+    System,
+}
+
+/// The codex.exe shipped inside the installer (resources/codex/codex.exe).
+pub fn bundled_codex(app: &AppHandle) -> Option<PathBuf> {
+    let exe = if cfg!(windows) { "codex.exe" } else { "codex" };
+    app.path().resource_dir().ok().map(|d| d.join("codex").join(exe)).filter(|p| p.is_file())
+}
+
+/// Resolution order: a path the user set explicitly, the bundled binary, then PATH / npm installs.
+pub fn locate_codex(custom: Option<&str>, bundled: Option<PathBuf>) -> Result<(PathBuf, Vec<String>, CodexSource), String> {
+    if let Some(path) = custom.map(str::trim).filter(|p| !p.is_empty()) {
+        let p = PathBuf::from(path);
+        if p.is_file() {
+            return Ok((p, vec![], CodexSource::Custom));
+        }
+        return Err(format!("설정한 Codex 경로에 파일이 없습니다: {path}"));
+    }
+    if let Some(p) = bundled {
+        return Ok((p, vec![], CodexSource::Bundled));
+    }
+    resolve_codex(None).map(|(p, a)| (p, a, CodexSource::System))
+}
+
 pub fn resolve_codex(custom: Option<&str>) -> Result<(PathBuf, Vec<String>), String> {
     if let Some(path) = custom.map(str::trim).filter(|p| !p.is_empty()) {
         let p = PathBuf::from(path);
@@ -116,13 +145,28 @@ pub fn resolve_codex(custom: Option<&str>) -> Result<(PathBuf, Vec<String>), Str
             }
         }
     }
-    Err("Codex CLI를 찾을 수 없습니다. 'npm install -g @openai/codex'로 설치한 뒤 앱을 다시 시작하거나, 설정에서 codex.exe 경로를 지정하세요.".into())
+    Err("앱에 포함된 Codex를 찾을 수 없습니다. 설치 파일로 앱을 다시 설치하거나, 설정 → 고급에서 codex.exe 경로를 지정하세요.".into())
 }
 
 pub fn workspace_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("codex-workspace");
     std::fs::create_dir_all(&dir).map_err(|e| format!("Codex 작업 폴더를 만들 수 없습니다: {e}"))?;
     Ok(dir)
+}
+
+/// `codex app-server` arguments: stdio transport, login stored in the OS keyring
+/// (Windows Credential Manager) instead of auth.json, and no shell, sub-agents or web search.
+pub fn app_server_args() -> Vec<String> {
+    [
+        "app-server", "--listen", "stdio://",
+        "-c", "cli_auth_credentials_store=\"keyring\"",
+        "-c", "features.shell_tool=false",
+        "-c", "features.multi_agent=false",
+        "-c", "web_search=\"disabled\"",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
 }
 
 fn developer_instructions() -> String {
@@ -325,12 +369,22 @@ impl CodexState {
             return Ok(());
         }
         self.stop();
-        let settings = config::load(&app.path().app_data_dir().map_err(|e| e.to_string())?);
-        let (program, mut args) = resolve_codex(settings.codex_path.as_deref())?;
-        args.push("app-server".into());
+        let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+        let settings = config::load(&data);
+        let (program, mut args, _) = locate_codex(settings.codex_path.as_deref(), bundled_codex(app))?;
+        args.extend(app_server_args());
         let cwd = workspace_dir(app)?;
+        // Canvas Assistant keeps its own Codex home, separate from any Codex CLI/app on this PC.
+        let home = data.join("codex");
+        std::fs::create_dir_all(&home).map_err(|e| format!("Codex 폴더를 만들 수 없습니다: {e}"))?;
         let mut command = Command::new(&program);
-        command.args(&args).current_dir(&cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+        command
+            .args(&args)
+            .current_dir(&cwd)
+            .env("CODEX_HOME", &home)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -427,6 +481,49 @@ impl CodexState {
         self.request_raw(method, safe, timeout)
     }
 
+    /// Starts an ephemeral thread with the Canvas tools, reports their startup status and
+    /// calls `canvas_profile` once. Nothing is sent to the model.
+    pub fn diagnose(&self, app: &AppHandle) -> Result<Value, String> {
+        self.start(app)?;
+        let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+        let workspace = workspace_dir(app)?.to_string_lossy().into_owned();
+        let mcp = canvas_mcp_config(app)?;
+        let mut params = validated_request("thread/start", &json!({"ephemeral": true}), &workspace, Some(&mcp))?;
+        params["ephemeral"] = json!(true);
+        let started = self.request_raw("thread/start", params, Duration::from_secs(60))?;
+        let thread_id = started.pointer("/thread/id").and_then(Value::as_str).ok_or("Codex가 대화 ID를 주지 않았습니다")?.to_string();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut server = Value::Null;
+        while Instant::now() < deadline {
+            let list = self.request_raw("mcpServerStatus/list", json!({"threadId": thread_id, "serverName": "canvas"}), Duration::from_secs(30))?;
+            server = list.pointer("/data/0").cloned().unwrap_or(Value::Null);
+            let status = server.get("runtimeStatus").and_then(Value::as_str).unwrap_or("");
+            if status != "starting" && !status.is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(700));
+        }
+        let tools = server.get("tools").and_then(Value::as_object).map(|t| t.len()).unwrap_or(0);
+        let call = if tools > 0 {
+            self.request_raw("mcpServer/tool/call", json!({"threadId": thread_id, "server": "canvas", "tool": "canvas_profile", "arguments": {}}), Duration::from_secs(60))
+                .map(|r| json!({"isError": r.get("isError"), "text": r.pointer("/content/0/text").and_then(Value::as_str).map(|t| t.chars().take(400).collect::<String>())}))
+                .unwrap_or_else(|e| json!({"isError": true, "text": e}))
+        } else {
+            Value::Null
+        };
+        Ok(json!({
+            "canvasToolsInChat": config::load(&data_dir).canvas_tools_in_chat,
+            "canvasConfigured": config::load(&data_dir).canvas_base_url.is_some() && config::get_token().is_some(),
+            "server": {
+                "status": server.get("runtimeStatus"),
+                "error": server.get("toolsError").or_else(|| server.get("error")),
+                "tools": tools,
+            },
+            "profileCall": call,
+            "helper": std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(),
+        }))
+    }
+
     /// Runs one prompt in an ephemeral thread and returns the final answer.
     /// Used by scheduled AI briefings; nothing is shown in the chat list.
     pub fn run_prompt(&self, app: &AppHandle, prompt: &str, max_wait: Duration) -> Result<String, String> {
@@ -494,6 +591,31 @@ pub fn path_display(p: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn locate_prefers_custom_then_bundled() {
+        let dir = std::env::temp_dir().join(format!("ca-codex-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bundled = dir.join("codex.exe");
+        std::fs::write(&bundled, b"x").unwrap();
+        let (p, _, src) = locate_codex(None, Some(bundled.clone())).unwrap();
+        assert_eq!((p, src), (bundled.clone(), CodexSource::Bundled));
+        let custom = dir.join("custom.exe");
+        std::fs::write(&custom, b"x").unwrap();
+        let (p, _, src) = locate_codex(Some(custom.to_str().unwrap()), Some(bundled)).unwrap();
+        assert_eq!((p, src), (custom, CodexSource::Custom));
+        assert!(locate_codex(Some("/nope/codex.exe"), None).is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn app_server_is_locked_down() {
+        let a = app_server_args().join(" ");
+        assert!(a.starts_with("app-server --listen stdio://"));
+        assert!(a.contains("cli_auth_credentials_store=\"keyring\""));
+        assert!(a.contains("features.shell_tool=false"));
+        assert!(a.contains("web_search=\"disabled\""));
+    }
 
     #[test]
     fn whitelist_rejects_unknown_methods() {

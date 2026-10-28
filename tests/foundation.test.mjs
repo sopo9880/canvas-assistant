@@ -49,3 +49,25 @@ test("app icons generated from the logo are committed", () => {
     assert.ok(fs.existsSync(`src-tauri/icons/${f}`), f);
   }
 });
+
+test("the installer bundles a pinned Codex and the bridge locks it down", () => {
+  const pkg = JSON.parse(read("package.json"));
+  assert.match(pkg.codexVersion, /^\d+\.\d+\.\d+$/);
+  const res = JSON.parse(read("src-tauri/tauri.conf.json")).bundle.resources;
+  assert.equal(res["resources/codex/codex.exe"], "codex/codex.exe");
+  const src = read("src-tauri/src/codex.rs");
+  for (const flag of ['cli_auth_credentials_store=\\"keyring\\"', "features.shell_tool=false", 'web_search=\\"disabled\\"', '"CODEX_HOME"']) {
+    assert.ok(src.includes(flag), flag);
+  }
+});
+
+test("links open through the validated open_external command, not a WebView permission", () => {
+  const cap = JSON.stringify(JSON.parse(read("src-tauri/capabilities/default.json")));
+  assert.ok(!cap.includes("opener:"), "the WebView gets no opener permission");
+  const lib = read("src-tauri/src/lib.rs");
+  assert.ok(lib.includes("fn open_external") && lib.includes('matches!(parsed.scheme(), "https" | "http")'));
+  assert.ok(read("src/components.tsx").includes('invoke("open_external"'));
+  for (const f of ["src/App.tsx", "src/components.tsx", "src/CodexLogin.tsx"]) {
+    assert.ok(!read(f).includes("plugin-opener"), f);
+  }
+});

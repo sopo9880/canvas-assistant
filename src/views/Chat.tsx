@@ -3,7 +3,8 @@ import { createPortal } from "react-dom";
 import { listen } from "@tauri-apps/api/event";
 import { api, errorText, Model } from "../api";
 import { useApp } from "../App";
-import { Banner, Markdown, open, Spinner } from "../components";
+import { Banner, Markdown, Spinner } from "../components";
+import CodexLogin from "../CodexLogin";
 import { effortLabels, toolLabels } from "../util";
 
 type Entry =
@@ -34,7 +35,7 @@ function itemToEntry(item: any): Entry | null {
 }
 
 export default function Chat({ prefill }: { prefill: { text: string; n: number } | null }) {
-  const { codex, connectCodex, refreshAccount, info, refreshInfo, go } = useApp();
+  const { codex, info, refreshInfo, go } = useApp();
   const [models, setModels] = useState<Model[]>([]);
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState("");
@@ -45,7 +46,6 @@ export default function Chat({ prefill }: { prefill: { text: string; n: number }
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [login, setLogin] = useState<{ code?: string; url?: string; loginId?: string; waiting?: boolean } | null>(null);
   const [slot, setSlot] = useState<HTMLElement | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const threadRef = useRef("");
@@ -142,6 +142,11 @@ export default function Chat({ prefill }: { prefill: { text: string; n: number }
           void refreshInfo();
           break;
         }
+        case "mcpServer/startupStatus/updated":
+          if (params?.name === "canvas" && (params?.status === "failed" || params?.error)) {
+            setError(`Canvas 도구를 시작하지 못했습니다: ${params?.error ?? params?.failureReason ?? params?.status}. 설정 → 'AI의 Canvas 도구 점검'으로 확인하세요.`);
+          }
+          break;
         case "error":
           if (!params?.willRetry) setError(params?.error?.message ?? "Codex 오류가 발생했습니다.");
           break;
@@ -212,20 +217,6 @@ export default function Chat({ prefill }: { prefill: { text: string; n: number }
     try { await api.codex("turn/interrupt", { threadId, turnId }); } catch (e) { setError(errorText(e)); }
   }
 
-  async function startLogin(type: "chatgpt" | "chatgptDeviceCode") {
-    setError("");
-    try {
-      const r = await api.codex<any>("account/login/start", { type });
-      if (type === "chatgpt" && r.authUrl) {
-        setLogin({ loginId: r.loginId, waiting: true });
-        open(r.authUrl);
-      } else {
-        setLogin({ code: r.userCode, url: r.verificationUrl, loginId: r.loginId, waiting: true });
-      }
-    } catch (e) { setError(errorText(e)); }
-  }
-
-  useEffect(() => { if (codex.account) setLogin(null); }, [codex.account]);
 
   async function saveModel(m: string, e: string) {
     try { await api.saveSettings({ defaultModel: m, defaultEffort: e }); } catch { /* not critical */ }
@@ -307,36 +298,11 @@ export default function Chat({ prefill }: { prefill: { text: string; n: number }
         const el = e.currentTarget;
         stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
       }}>
-        {codex.state === "error" && (
+        {codex.state === "starting" && <div className="center"><Spinner label="Codex 준비 중…" /></div>}
+        {(codex.state === "error" || (codex.state === "ready" && !codex.account)) && (
           <div className="card setup">
-            <h2>Codex에 연결하지 못했습니다</h2>
-            <p className="muted">{codex.error}</p>
-            <p className="muted small">Codex CLI가 필요합니다. 설치되어 있지 않다면 PowerShell에서 <code>npm install -g @openai/codex</code>를 실행한 뒤 다시 연결하세요.</p>
-            <div className="row">
-              <button className="primary" onClick={() => void connectCodex()}>다시 연결</button>
-              <button onClick={() => go("settings")}>Codex 경로 설정</button>
-            </div>
-          </div>
-        )}
-        {codex.state === "starting" && <div className="center"><Spinner label="Codex 연결 중…" /></div>}
-        {codex.state === "ready" && !codex.account && (
-          <div className="card setup">
-            <h2>ChatGPT 계정으로 로그인</h2>
-            <p className="muted">Codex는 ChatGPT 계정으로 동작합니다. 로그인 정보는 Codex가 직접 보관하고, 이 앱은 저장하지 않습니다.</p>
-            {login?.code ? (
-              <div className="device">
-                <div className="muted small">아래 코드를 인증 페이지에 입력하세요</div>
-                <strong className="code">{login.code}</strong>
-                <button className="primary" onClick={() => open(login.url)}>인증 페이지 열기</button>
-              </div>
-            ) : login?.waiting ? (
-              <p><Spinner label="브라우저에서 로그인을 마치면 자동으로 연결됩니다…" /></p>
-            ) : null}
-            <div className="row">
-              <button className="primary" onClick={() => void startLogin("chatgpt")}>브라우저로 로그인</button>
-              <button onClick={() => void startLogin("chatgptDeviceCode")}>기기 코드로 로그인</button>
-              <button className="ghost" onClick={() => void refreshAccount()}>상태 새로고침</button>
-            </div>
+            <h2>{codex.state === "error" ? "Codex에 연결하지 못했습니다" : "ChatGPT 계정으로 로그인"}</h2>
+            <CodexLogin />
           </div>
         )}
         {ready && entries.length === 0 && (

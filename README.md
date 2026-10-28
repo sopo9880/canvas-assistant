@@ -16,10 +16,7 @@ Canvas LMS와 Codex(ChatGPT)를 연결한 Windows용 개인 학습 비서입니�
 
 1. [Releases](../../releases)에서 `CanvasAssistant-x.y.z-x64-setup.exe`를 받아 실행합니다. 관리자 권한 없이 현재 사용자에게 설치됩니다.
 2. 코드 서명이 없어서 처음 실행할 때 "Windows의 PC 보호" 창이 뜨면 **추가 정보 → 실행**을 누르세요.
-3. AI 기능에는 [Codex CLI](https://github.com/openai/codex)가 필요합니다. [Node.js](https://nodejs.org)를 설치한 뒤 PowerShell에서 실행하세요.
-   ```powershell
-   npm install -g @openai/codex
-   ```
+3. Codex는 앱에 포함되어 있어서 따로 설치할 필요가 없습니다.
 
 요구 사항: Windows 10/11 64비트, WebView2(설치 프로그램이 없으면 자동 설치), ChatGPT 계정(AI 기능), 학교 Canvas 계정.
 
@@ -27,13 +24,13 @@ Canvas LMS와 Codex(ChatGPT)를 연결한 Windows용 개인 학습 비서입니�
 
 1. **설정 → Canvas 연결**에 학교 Canvas 주소(예: `canvas.학교.ac.kr`)를 입력합니다.
 2. **토큰 발급 페이지 열기**를 눌러 Canvas의 *계정 → 설정 → 새 액세스 토큰*에서 토큰을 만들고 붙여넣은 뒤 **연결**을 누릅니다. 연결을 확인한 뒤에만 저장됩니다.
-3. **AI 대화** 화면에서 **브라우저로 로그인**(또는 기기 코드 로그인)으로 ChatGPT 계정에 로그인합니다.
+3. **설정 → ChatGPT 계정**(또는 AI 대화 화면)에서 **ChatGPT로 로그인 (브라우저)** 를 누릅니다. 브라우저 로그인이 안 되면 **기기 코드로 로그인**을 쓰세요.
 
 ## 보안과 개인정보
 
 - Canvas 토큰은 **Windows 자격 증명 관리자**에만 저장됩니다. 설정 파일·로그·화면에 남지 않고, 토큰은 설정한 Canvas 주소로만 전송됩니다(다른 도메인으로 가는 페이지 링크나 리다이렉트에는 보내지 않음).
-- ChatGPT 로그인 정보는 Codex가 직접 관리하며 이 앱은 저장하지 않습니다.
-- AI는 **읽기 전용 샌드박스**에서 실행됩니다. 명령 실행·파일 수정 요청은 항상 거절되고, AI가 쓸 수 있는 도구는 Canvas 조회 도구와 '변경 제안' 도구뿐입니다.
+- ChatGPT 로그인은 앱에 포함된 Codex가 처리하고, 로그인 정보는 Windows 자격 증명 관리자에 저장됩니다. Codex는 앱 전용 폴더(`%APPDATA%\com.sopo9880.canvasassistant\codex`)를 써서 PC에 따로 설치된 Codex와 섞이지 않습니다.
+- AI는 **읽기 전용 샌드박스**에서 실행되고 셸 도구·웹 검색이 꺼져 있습니다. 명령 실행·파일 수정 요청은 항상 거절되고, AI가 쓸 수 있는 도구는 Canvas 조회 도구와 '변경 제안' 도구뿐입니다.
 - Canvas를 바꾸는 작업은 모두 **승인 대기**를 거칩니다. 한 요청은 한 번만 실행됩니다.
 - 앱 데이터(설정, 승인 대기열, 알림 기록)는 `%APPDATA%\com.sopo9880.canvasassistant`에 있습니다.
 
@@ -54,6 +51,7 @@ Canvas LMS와 Codex(ChatGPT)를 연결한 Windows용 개인 학습 비서입니�
 
 ```bash
 npm ci
+npm run fetch:codex           # 설치 파일에 넣을 codex.exe 받기 (package.json codexVersion)
 npm test                      # 저장소 규칙 테스트
 cargo test --manifest-path src-tauri/Cargo.toml   # Rust 단위·통합 테스트
 npm run tauri dev             # 앱 실행 (Windows)

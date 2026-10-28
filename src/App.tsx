@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { openExternal } from "./components";
 import { api, AppInfo, errorText } from "./api";
 import Chat from "./views/Chat";
 import CanvasView from "./views/Canvas";
@@ -15,8 +16,21 @@ export type CodexStatus = {
   account?: { type: string; email?: string | null; planType?: string } | null;
 };
 
+export type LoginState = {
+  mode: "browser" | "device";
+  loginId?: string;
+  authUrl?: string;
+  userCode?: string;
+  verificationUrl?: string;
+  openFailed?: boolean;
+} | null;
+
 type Ctx = {
   info: AppInfo | null;
+  login: LoginState;
+  loginError: string;
+  startLogin: (mode: "browser" | "device") => Promise<void>;
+  cancelLogin: () => Promise<void>;
   refreshInfo: () => Promise<void>;
   codex: CodexStatus;
   connectCodex: () => Promise<void>;
@@ -36,6 +50,10 @@ export default function App() {
   const [pendingCount, setPendingCount] = useState(0);
   const [prefill, setPrefill] = useState<{ text: string; n: number } | null>(null);
   const retries = useRef(0);
+  const [login, setLogin] = useState<LoginState>(null);
+  const [loginError, setLoginError] = useState("");
+  const loginRef = useRef<LoginState>(null);
+  useEffect(() => { loginRef.current = login; }, [login]);
 
   const refreshInfo = useCallback(async () => {
     try {
@@ -77,9 +95,18 @@ export default function App() {
           setTimeout(() => void connectCodex(), 2000 * retries.current);
         }
       }),
-      listen<{ method: string }>("codex-event", (e) => {
-        const m = e.payload.method;
-        if (m === "account/updated" || m === "account/login/completed") void refreshAccount();
+      listen<{ method: string; params?: any }>("codex-event", (e) => {
+        const { method: m, params } = e.payload;
+        if (m === "account/login/completed") {
+          const mine = !params?.loginId || params.loginId === loginRef.current?.loginId;
+          if (mine) {
+            setLogin(null);
+            if (params?.success === false) setLoginError(params?.error || "로그인이 완료되지 않았습니다. 다시 시도해 주세요.");
+            else setLoginError("");
+          }
+          void refreshAccount();
+        }
+        if (m === "account/updated") void refreshAccount();
       }),
       listen<{ count?: number }>("pending-changed", (e) => {
         if (typeof e.payload?.count === "number") setPendingCount(e.payload.count);
@@ -89,12 +116,35 @@ export default function App() {
     return () => { subs.forEach((p) => void p.then((f) => f())); };
   }, [refreshInfo, connectCodex, refreshAccount]);
 
+  const startLogin = useCallback(async (mode: "browser" | "device") => {
+    setLoginError("");
+    try {
+      if (codex.state !== "ready") await connectCodex();
+      const r = await api.codex<any>("account/login/start", { type: mode === "browser" ? "chatgpt" : "chatgptDeviceCode" });
+      const next: LoginState = { mode, loginId: r.loginId, authUrl: r.authUrl, userCode: r.userCode, verificationUrl: r.verificationUrl };
+      setLogin(next);
+      const url = mode === "browser" ? r.authUrl : r.verificationUrl;
+      if (url) {
+        // If the browser cannot be opened, the login panel shows the link to copy instead.
+        try { await openExternal(url); } catch { setLogin({ ...next, openFailed: true }); }
+      }
+    } catch (e) {
+      setLoginError(errorText(e));
+    }
+  }, [codex.state, connectCodex]);
+
+  const cancelLogin = useCallback(async () => {
+    const id = loginRef.current?.loginId;
+    setLogin(null);
+    if (id) { try { await api.codex("account/login/cancel", { loginId: id }); } catch { /* already finished */ } }
+  }, []);
+
   const askAI = useCallback((text: string) => {
     setPrefill((p) => ({ text, n: (p?.n ?? 0) + 1 }));
     setTab("chat");
   }, []);
 
-  const ctx: Ctx = { info, refreshInfo, codex, connectCodex, refreshAccount, go: setTab, askAI, pendingCount };
+  const ctx: Ctx = { info, login, loginError, startLogin, cancelLogin, refreshInfo, codex, connectCodex, refreshAccount, go: setTab, askAI, pendingCount };
   const canvasReady = !!(info?.hasToken && info.settings.canvasBaseUrl);
 
   const nav: Array<{ id: Tab; label: string; icon: string }> = [
