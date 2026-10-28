@@ -276,7 +276,10 @@ impl Client {
             })
             .unwrap_or_else(|| body.chars().take(200).collect());
         Err(match status {
-            401 => CanvasError::Unauthorized,
+            // Canvas answers 401 both for a bad token and for a resource the student may not open
+            // (e.g. a course's Files menu that is turned off). Only the former means "reconnect".
+            401 if message.to_lowercase().contains("access token") || message.to_lowercase().contains("invalid") || message.is_empty() => CanvasError::Unauthorized,
+            401 => CanvasError::Forbidden(format!("이 항목은 학생에게 공개되지 않았거나 메뉴가 꺼져 있습니다 ({message})")),
             403 if body.contains("Rate Limit") || headers_remaining == Some("0") => CanvasError::RateLimited,
             403 => CanvasError::Forbidden(message),
             404 => CanvasError::NotFound,
@@ -613,6 +616,31 @@ impl Client {
         Ok(target)
     }
 
+    /// Fetches a file URL (Canvas file or submission attachment) into memory.
+    /// The token is only attached when the URL is on the Canvas origin; storage redirects drop it.
+    pub fn fetch_bytes(&self, url: &str, limit: u64) -> Result<Vec<u8>> {
+        if !url.starts_with("https://") && !same_origin(&self.base, url) {
+            return Err(CanvasError::Invalid("파일 주소가 올바르지 않습니다.".into()));
+        }
+        let request = self.download_agent.get(url);
+        let request = if same_origin(&self.base, url) { request.header("Authorization", &format!("Bearer {}", self.token)) } else { request };
+        let mut response = request.call().map_err(|e| CanvasError::Network(e.to_string()))?;
+        let status = response.status().as_u16();
+        if !(200..300).contains(&status) {
+            return Err(match status {
+                401 | 403 => CanvasError::Forbidden("이 파일을 내려받을 권한이 없습니다 (잠긴 파일이거나 공개 전일 수 있음)".into()),
+                404 => CanvasError::NotFound,
+                _ => CanvasError::Http(status, "파일 다운로드 실패".into()),
+            });
+        }
+        let mut buf = Vec::new();
+        response.body_mut().with_config().limit(limit + 1).reader().take(limit + 1).read_to_end(&mut buf).map_err(|e| CanvasError::Network(e.to_string()))?;
+        if buf.len() as u64 > limit {
+            return Err(CanvasError::Invalid(format!("파일이 너무 커서 ({}MB 초과) 내용을 읽을 수 없습니다. 내려받아 확인하세요.", limit >> 20)));
+        }
+        Ok(buf)
+    }
+
     // ----- write operations (only executed after explicit user approval) -----
 
     pub fn execute_write(&self, kind: &str, p: &Value) -> Result<Value> {
@@ -711,7 +739,7 @@ pub const WRITE_KINDS: &[&str] = &[
 ];
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -754,10 +782,16 @@ mod tests {
     }
 
     /// Minimal HTTP/1.1 server answering scripted responses on loopback.
-    fn mock_server(responses: Vec<(u16, Vec<(&'static str, String)>, String)>) -> (String, std::sync::mpsc::Receiver<String>) {
+    pub(crate) fn mock_server(responses: Vec<(u16, Vec<(&'static str, String)>, String)>) -> (String, std::sync::mpsc::Receiver<String>) {
+        mock_server_with(move |_| responses)
+    }
+
+    /// Like `mock_server`, but the script can refer to the server's own base URL.
+    pub(crate) fn mock_server_with(script: impl FnOnce(&str) -> Vec<(u16, Vec<(&'static str, String)>, String)>) -> (String, std::sync::mpsc::Receiver<String>) {
         use std::io::{BufRead, BufReader, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let responses = script(&base);
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             for (status, headers, body) in responses {

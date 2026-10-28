@@ -58,6 +58,7 @@ export const api = {
   canvasDisconnect: () => invoke<void>("canvas_disconnect"),
   canvas: <T = any>(tool: string, args: Record<string, unknown> = {}) => invoke<T>("canvas_query", { tool, args }),
   download: (fileId: string) => invoke<string>("canvas_download", { fileId: String(fileId) }),
+  lxDownload: (courseId: string, contentId: string) => invoke<string>("learningx_download", { courseId: String(courseId), contentId: String(contentId) }),
   pending: (includeDone = false) => invoke<Pending[]>("pending_list", { includeDone }),
   decide: (id: number, approve: boolean, edits?: Record<string, unknown>) => invoke<any>("pending_decide", { id, approve, edits: edits ?? null }),
   audit: () => invoke<Array<{ at: number; action: string; detail: string; ok: boolean }>>("audit_list"),

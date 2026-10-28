@@ -76,7 +76,7 @@ mockIPC((cmd, args: any) => {
       const t = args.tool;
       const ca = args.args ?? {};
       if (t === "canvas_course_tabs") return [
-        { id: "home", label: "홈" }, { id: "syllabus", label: "수업 계획서" }, { id: "announcements", label: "공지" }, { id: "files", label: "강의자료실" },
+        { id: "home", label: "홈" }, { id: "syllabus", label: "수업 계획서" }, { id: "announcements", label: "공지" }, { id: "context_external_tool_2", label: "강의자료실", type: "external", html_url: "https://canvas.example.ac.kr/courses/101/external_tools/2" },
         { id: "discussions", label: "게시판" }, { id: "modules", label: "주차학습" }, { id: "assignments", label: "과제 및 평가" }, { id: "quizzes", label: "설문" },
         { id: "people", label: "사용자 및 그룹" }, { id: "context_external_tool_77", label: "출결현황", type: "external", html_url: "https://canvas.example.ac.kr/courses/101/external_tools/77" },
         { id: "grades", label: "성적" }, { id: "context_external_tool_88", label: "학습 분석", type: "external", html_url: "https://canvas.example.ac.kr/courses/101/external_tools/88" }];
@@ -84,7 +84,13 @@ mockIPC((cmd, args: any) => {
       if (t === "canvas_list_assignments") return [upcoming.todo[0].assignment, { id: "9010", name: "Lab 3 보고서", due_at: iso(-50), points_possible: 15, submission_types: ["online_upload"], submission: { workflow_state: "graded", score: 13 } }, upcoming.upcoming_events[1].assignment];
       if (t === "canvas_get_assignment") return { ...upcoming.todo[0].assignment, submission_types: ["online_upload", "online_text_entry"], allowed_attempts: 2, allowed_extensions: ["pdf", "hwp"], description: "교재 3장 연습문제 3.12, 3.15를 풀고 핀 효율을 계산하세요.\n손글씨 스캔본(PDF) 또는 한글 파일로 제출합니다.",
         rubric: [{ description: "풀이 과정", points: 10, ratings: [{ description: "완전", points: 10 }, { description: "부분", points: 5 }] }, { description: "최종 답", points: 10, ratings: [{ description: "정답", points: 10 }, { description: "오답", points: 0 }] }] };
-      if (t === "canvas_my_submission") return { workflow_state: "unsubmitted", attempt: 0, comments: [{ author_name: "김교수", comment: "단위를 꼭 표기하세요.", created_at: iso(-10) }] };
+      if (t === "canvas_learningx_resources") return { count: 3, items: [
+        { title: "1주차 강의 슬라이드", content_id: "a1", section: "1주차", type: "pdf", file_name: "week1.pdf", size: 2300000, created_at: iso(-300) },
+        { title: "실습 예제 코드", content_id: "a2", section: "1주차", type: "zip", file_name: "lab1.zip", size: 18000, created_at: iso(-290) },
+        { title: "2주차 강의 영상", content_id: "a3", section: "2주차", type: "movie", created_at: iso(-150) }] };
+      if (t === "canvas_learningx_read") return { name: "week1.pdf", text: "열전달 1주차\n\n1. 전도, 대류, 복사\n2. 푸리에 법칙 q = -k dT/dx", total_chars: 40 };
+      if (t === "canvas_read_submission") return { attempt: 2, attempts: [1, 2], submitted_at: iso(-20), files: [{ id: "x1", display_name: "main.cpp", size: 812, text: "#include <iostream>\nint main() {\n    std::cout << \"Hello\";\n}" }] };
+      if (t === "canvas_my_submission") return { workflow_state: "submitted", history: [{ attempt: 1, submitted_at: iso(-40) }, { attempt: 2, submitted_at: iso(-20) }], attempt: 2, comments: [{ author_name: "김교수", comment: "단위를 꼭 표기하세요.", created_at: iso(-10) }] };
       if (t === "canvas_folders") return [{ id: "1", name: "course files", full_name: "course files", files_count: 0 }, { id: "2", name: "1주차", full_name: "course files/1주차", files_count: 3 }, { id: "3", name: "2주차", full_name: "course files/2주차", files_count: 2 }];
       if (t === "canvas_folder_files") return [{ id: "f1", display_name: "01_열전달_개요.pdf", size: 2400000, updated_at: iso(-200) }, { id: "f2", display_name: "01_연습문제.hwp", size: 120000, updated_at: iso(-190) }];
       if (t === "canvas_assignment_groups") return [{ id: "g1", name: "과제", group_weight: 30, assignments: [{ id: "9010", name: "Lab 3 보고서", points_possible: 15, submission: { id: "s1", score: 13 } }, { id: "9001", name: "HW 6", points_possible: 20, submission: { id: "s2" } }] }, { id: "g2", name: "중간고사", group_weight: 30, assignments: [{ id: "m1", name: "중간고사", points_possible: 100, submission: { id: "s3", score: 82 } }] }, { id: "g3", name: "기말고사", group_weight: 40, assignments: [{ id: "f1", name: "기말고사", points_possible: 100, submission: { id: "s4" } }] }];

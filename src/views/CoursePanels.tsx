@@ -206,6 +206,7 @@ export function Files({ course }: P) {
       {msg && <Banner tone={msg.tone} onClose={() => setMsg(null)}>{msg.text}</Banner>}
       <div className="files-layout">
         <div className="folder-tree">
+          {folders.error && <p className="muted small">이 강의는 Canvas 파일 메뉴가 닫혀 있을 수 있습니다. 왼쪽 메뉴에 LearningX '강의자료실'이 있으면 그곳에서 자료를 확인하세요.</p>}
           <Loading r={folders} empty="폴더가 없습니다">{() => tree.map((f) => (
             <button key={f.id} className={"folder" + (folder?.id === f.id && !query ? " active" : "")} style={{ paddingLeft: 8 + depth(f) * 14 }} onClick={() => { setQuery(""); setFolder(f); }}>
               📂 {depth(f) === 0 ? "전체 자료" : f.name} <span className="muted small">{f.files_count || ""}</span>
@@ -382,6 +383,7 @@ function AssignmentDetail({ course, a, onClose }: P & { a: any; onClose: () => v
           {m.attachments?.length > 0 && <p className="small">📎 {m.attachments.map((f: any) => f.display_name).join(", ")}</p>}
           {m.url && <p className="small break">🔗 {m.url}</p>}
           {m.history?.length > 1 && <p className="muted small">제출 이력: {m.history.map((h: any) => `${h.attempt ?? "-"}차 ${formatDate(h.submitted_at)}${h.score != null ? ` (${h.score}점)` : ""}`).join(" · ")}</p>}
+          {m.workflow_state !== "unsubmitted" && <SubmissionContent course={course} assignmentId={String(a.id)} attempts={(m.history ?? []).map((h: any) => h.attempt).filter((x: any) => x != null)} aRef={r} />}
           {(m.comments ?? []).length > 0 && (
             <div className="comments">{m.comments.map((c: any, i: number) => (
               <div key={i} className="message"><div className="row space"><strong>{c.author_name}</strong><span className="muted small">{formatDate(c.created_at)}</span></div><p className="pre">{c.comment}</p></div>
@@ -553,6 +555,118 @@ export function Pages({ course }: P) {
         <Modal onClose={() => setPage(null)}>
           {page.loading ? <Spinner /> : page.error ? <Banner>{page.error}</Banner> : <><h2>{page.title}</h2><Markdown text={page.body || "내용이 없습니다."} /></>}
           <div className="row end"><button className="primary" onClick={() => setPage(null)}>닫기</button></div>
+        </Modal>
+      )}
+    </section>
+  );
+}
+
+// ---------------- 내 제출물 내용 ----------------
+function SubmissionContent({ course, assignmentId, attempts, aRef }: P & { assignmentId: string; attempts: number[]; aRef: CanvasRef }) {
+  const { askAI } = useApp();
+  const [attempt, setAttempt] = useState<number | "">("");
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  async function load(at: number | "") {
+    setLoading(true); setError("");
+    try { setData(await api.canvas<any>("canvas_read_submission", { course_id: course.id, assignment_id: assignmentId, ...(at ? { attempt: at } : {}) })); }
+    catch (e) { setError(errorText(e)); } finally { setLoading(false); }
+  }
+  return (
+    <div className="submission-content">
+      <div className="row wrap">
+        <button onClick={() => void load(attempt)} disabled={loading}>📄 제출한 내용 보기</button>
+        {attempts.length > 1 && (
+          <select aria-label="제출 차수" value={attempt} onChange={(e) => { const v = e.target.value ? Number(e.target.value) : ""; setAttempt(v); if (data) void load(v); }}>
+            <option value="">최신 제출</option>
+            {attempts.map((n) => <option key={n} value={n}>{n}차 제출</option>)}
+          </select>
+        )}
+        <button onClick={() => askAI(`첨부한 과제에 내가 ${attempt ? `${attempt}차로` : ""} 제출한 내용을 canvas_read_submission${attempt ? `(attempt=${attempt})` : ""}으로 읽고, 무엇을 냈는지와 받은 피드백·개선할 점을 정리해줘.`, { send: true, refs: [aRef] })}>✨ AI로 제출물 검토</button>
+      </div>
+      {loading && <Spinner label="제출 파일을 읽는 중…" />}
+      {error && <Banner>{error}</Banner>}
+      {data && !loading && (
+        <div className="stack">
+          {data.submitted === false && <p className="muted">{data.note}</p>}
+          {data.body && <details open><summary>제출한 글</summary><pre className="pre small code">{data.body}</pre></details>}
+          {data.url && <p className="small break">🔗 {data.url}</p>}
+          {(data.files ?? []).map((f: any) => (
+            <details key={f.id} open={(data.files ?? []).length === 1}>
+              <summary>📎 {f.display_name} <span className="muted small">{bytes(f.size)}</span></summary>
+              {f.error ? <Banner tone="info">{f.error}</Banner> : <pre className="pre small code">{f.text}{f.note ? `\n\n… ${f.note}` : ""}</pre>}
+            </details>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------- LearningX 강의자료실 ----------------
+export function LearningX({ course, label, url }: P & { label: string; url?: string }) {
+  const { openMenu, askAI } = useApp();
+  const res = useLoad(() => api.canvas<any>("canvas_learningx_resources", { course_id: course.id }), [course.id]);
+  const [msg, setMsg] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [preview, setPreview] = useState<{ title: string; text: string; note?: string } | null>(null);
+  const items: any[] = res.data?.items ?? [];
+  const groups = useMemo(() => {
+    const m = new Map<string, any[]>();
+    for (const it of items) { const k = it.section ?? "자료"; if (!m.has(k)) m.set(k, []); m.get(k)!.push(it); }
+    return Array.from(m.entries());
+  }, [items]);
+  const mref = (it: any) => ref(course, { kind: "material", label: it.title, id: String(it.content_id), extra: { type: it.type } });
+  return (
+    <section className="card">
+      <div className="row space">
+        <h2>📁 {label}</h2>
+        <div className="row">
+          <button onClick={() => void res.reload()} disabled={res.loading}>새로고침</button>
+          {url && <button onClick={() => open(url)}>브라우저에서 열기</button>}
+        </div>
+      </div>
+      <p className="muted small">LearningX 강의자료실을 앱에서 읽어옵니다. 우클릭하면 AI 채팅에 추가하거나 내려받을 수 있습니다.</p>
+      {msg && <Banner tone={msg.tone} onClose={() => setMsg(null)}>{msg.text}</Banner>}
+      {res.loading ? <Spinner label="LearningX에 연결하는 중…" /> : res.error ? (
+        <Banner>{res.error} — {url ? "브라우저에서 열어 확인하세요." : ""}</Banner>
+      ) : items.length === 0 ? (
+        <>
+          <Empty title="자료를 찾지 못했습니다" icon="📂" />
+          {res.data?.raw && <details><summary className="muted small">LearningX 응답 보기</summary><pre className="pre small">{res.data.raw}</pre></details>}
+        </>
+      ) : groups.map(([section, list]) => (
+        <div key={section} className="module">
+          <h3>{section}</h3>
+          <ul className="list">
+            {list.map((it: any) => (
+              <li key={it.content_id} className="list-item" onContextMenu={(e) => openMenu(e, mref(it))}>
+                <div className="grow">
+                  <div className="title">{it.title}</div>
+                  <div className="muted small">{[it.type, it.file_name, typeof it.size === "number" ? bytes(it.size) : null, it.created_at ? formatDate(it.created_at) : null].filter(Boolean).join(" · ")}</div>
+                </div>
+                <button disabled={busy === it.content_id} onClick={async () => {
+                  setBusy(it.content_id);
+                  try { const r = await api.canvas<any>("canvas_learningx_read", { course_id: course.id, content_id: it.content_id }); setPreview({ title: it.title, text: r.text, note: r.note }); }
+                  catch (e) { setMsg({ tone: "error", text: errorText(e) }); } finally { setBusy(null); }
+                }}>내용 보기</button>
+                <button onClick={() => askAI("첨부한 강의자료를 canvas_learningx_read로 읽고 핵심 내용을 정리해줘.", { send: true, refs: [mref(it)] })}>✨ 요약</button>
+                <button disabled={busy === it.content_id} onClick={async () => {
+                  setBusy(it.content_id);
+                  try { const p = await api.lxDownload(course.id, it.content_id); setMsg({ tone: "ok", text: `저장했습니다: ${p}` }); }
+                  catch (e) { setMsg({ tone: "error", text: errorText(e) }); } finally { setBusy(null); }
+                }}>다운로드</button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+      {preview && (
+        <Modal onClose={() => setPreview(null)}>
+          <h2>{preview.title}</h2>
+          <pre className="pre small code">{preview.text}{preview.note ? `\n\n… ${preview.note}` : ""}</pre>
+          <div className="row end"><button onClick={() => setPreview(null)}>닫기</button></div>
         </Modal>
       )}
     </section>

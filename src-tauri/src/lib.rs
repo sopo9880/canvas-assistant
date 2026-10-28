@@ -4,6 +4,9 @@ pub mod canvas_ext;
 pub mod codex;
 pub mod config;
 pub mod db;
+pub mod extract;
+pub mod learningx;
+pub mod materials;
 pub mod mcp;
 pub mod scheduler;
 
@@ -212,6 +215,32 @@ async fn canvas_download(app: AppHandle, state: Shared<'_>, file_id: String) -> 
         let id = canvas::require_id(&json!({"id": file_id}), "id")?;
         let client = config::canvas_client(&s.data_dir)?;
         Ok(client.download_file(id, &dir)?)
+    }).await?;
+    let _ = app.opener().reveal_item_in_dir(&path);
+    Ok(path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+async fn learningx_download(app: AppHandle, state: Shared<'_>, course_id: String, content_id: String) -> Result<String, String> {
+    let s = state.inner().clone();
+    let dir = app.path().download_dir().map_err(|e| e.to_string())?.join("Canvas Assistant");
+    let path = blocking(move || {
+        let course = canvas::require_id(&json!({"id": course_id}), "id")?;
+        let client = config::canvas_client(&s.data_dir)?;
+        let (name, bytes) = client.learningx_download(course, content_id.trim(), 500 * 1024 * 1024)?;
+        std::fs::create_dir_all(&dir).map_err(|e| format!("폴더를 만들 수 없습니다: {e}"))?;
+        let name = learningx::sanitize(&name);
+        let mut target = dir.join(&name);
+        let mut n = 1;
+        while target.exists() {
+            let p = std::path::Path::new(&name);
+            let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
+            let ext = p.extension().and_then(|s| s.to_str()).map(|e| format!(".{e}")).unwrap_or_default();
+            target = dir.join(format!("{stem} ({n}){ext}"));
+            n += 1;
+        }
+        std::fs::write(&target, bytes).map_err(|e| format!("파일을 저장할 수 없습니다: {e}"))?;
+        Ok::<_, String>(target)
     }).await?;
     let _ = app.opener().reveal_item_in_dir(&path);
     Ok(path.to_string_lossy().into_owned())
@@ -533,6 +562,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             app_info, settings_save, check_update,
             canvas_connect, canvas_disconnect, canvas_query, canvas_download,
+            learningx_download,
             pending_list, pending_decide, canvas_action, pick_files, audit_list,
             jobs_list, jobs_update, jobs_run_now, briefings_list,
             codex_start, codex_call, codex_locate, codex_diagnose, open_external

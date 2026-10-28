@@ -6,8 +6,9 @@ Canvas LMS와 Codex(ChatGPT)를 연결한 Windows용 개인 학습 비서입니�
 
 ## 주요 기능
 
-- **AI 대화**: "이번 주 마감 과제 정리해줘", "최근 공지 요약해줘"처럼 물어보면 Codex가 Canvas 도구 43개로 직접 조회해서 답합니다. 입력창의 🧰 버튼으로 도구를 직접 실행해 결과를 첨부할 수 있고, 대화는 보관·삭제할 수 있습니다.
+- **AI 대화**: "이번 주 마감 과제 정리해줘", "최근 공지 요약해줘"처럼 물어보면 Codex가 Canvas 도구 47개로 직접 조회해서 답합니다. 강의자료(PDF·PPT·Word·한글·코드)와 내가 낸 제출물의 **내용까지 읽고** 답합니다. 입력창의 🧰 버튼으로 도구를 직접 실행해 결과를 첨부할 수 있고, 대화는 보관·삭제할 수 있습니다.
 - **우클릭 메뉴**: 과제·공지·파일·강의를 우클릭해 AI 채팅에 추가, 바로 분석, 제출, 완료 표시.
+- **LearningX 강의자료실**: 강의자료실이 LearningX(외부 도구)인 학교도 앱에서 자료 목록·내용 보기·다운로드·AI 요약이 됩니다.
 - **과제 제출**: 파일(여러 개)·텍스트·URL 제출과 코멘트를 앱에서 바로. 남은 제출 횟수·허용 형식을 먼저 확인합니다.
 - **메시지함**: Canvas 메시지 읽기, 답장, 새 메시지.
 - **Canvas 대시보드**: 다가오는 과제(남은 시간·제출 여부), 강의별 현재 점수, 최근 7일 공지를 한눈에 봅니다. 강의를 열면 학교 Canvas와 같은 메뉴(홈, 수업 계획서, 강의자료실, 게시판, 주차학습, 과제 및 평가, 성적 등)가 나오고, 외부 도구 메뉴는 브라우저로 엽니다. 파일은 `다운로드\Canvas Assistant` 폴더로 받습니다.
@@ -34,6 +35,7 @@ Canvas LMS와 Codex(ChatGPT)를 연결한 Windows용 개인 학습 비서입니�
 - Canvas 토큰은 **Windows 자격 증명 관리자**에만 저장됩니다. 설정 파일·로그·화면에 남지 않고, 토큰은 설정한 Canvas 주소로만 전송됩니다(다른 도메인으로 가는 페이지 링크나 리다이렉트에는 보내지 않음).
 - ChatGPT 로그인은 앱에 포함된 Codex가 처리하고, 로그인 정보는 Windows 자격 증명 관리자에 저장됩니다. Codex는 앱 전용 폴더(`%APPDATA%\com.sopo9880.canvasassistant\codex`)를 써서 PC에 따로 설치된 Codex와 섞이지 않습니다.
 - AI는 **읽기 전용 샌드박스**에서 실행되고 셸 도구·웹 검색이 꺼져 있습니다. 명령 실행·파일 수정 요청은 항상 거절되고, AI가 쓸 수 있는 도구는 Canvas 조회 도구와 '변경 제안' 도구뿐입니다.
+- LearningX 연결은 Canvas의 일회용 외부 도구 실행 주소로 하고, Canvas 토큰은 LearningX·자료 서버로 보내지 않습니다. LearningX 쿠키는 메모리에만 두고 20분 뒤 버립니다.
 - Canvas를 바꾸는 작업은 모두 **승인 대기**를 거칩니다. 한 요청은 한 번만 실행됩니다.
 - 앱 데이터(설정, 승인 대기열, 알림 기록)는 `%APPDATA%\com.sopo9880.canvasassistant`에 있습니다.
 
@@ -45,6 +47,9 @@ Canvas LMS와 Codex(ChatGPT)를 연결한 Windows용 개인 학습 비서입니�
 | `src-tauri/src/codex.rs` | `codex app-server` JSON-RPC 브리지 (허용 목록, 읽기 전용 강제, Codex 실행 파일 탐색) |
 | `src-tauri/src/canvas.rs` | Canvas REST 클라이언트 (페이지네이션, 요청 한도 재시도, 토큰 출처 제한, 쓰기 작업) |
 | `src-tauri/src/canvas_ext.rs` | 강의 탭·계획서·플래너·제출 이력·토론·메시지함 등 조회, 파일 업로드 제출, 나머지 쓰기 작업 |
+| `src-tauri/src/extract.rs` | 파일 텍스트 추출 (PDF, Office, 한글, 코드, ZIP, ipynb) |
+| `src-tauri/src/materials.rs` | Canvas 파일·내 제출물 내용 읽기 |
+| `src-tauri/src/learningx.rs` | LearningX 강의자료실 (LTI 실행, 메모리 쿠키, 자료 목록·다운로드) |
 | `src-tauri/src/mcp.rs` | Codex가 실행하는 Canvas MCP 서버 (`canvas-assistant.exe --mcp-canvas`) |
 | `src-tauri/src/db.rs` | SQLite: 승인 대기열, 예약 작업, 알림 중복 방지, 활동 기록 |
 | `src-tauri/src/scheduler.rs` | 마감·공지·성적 알림과 AI 브리핑 |

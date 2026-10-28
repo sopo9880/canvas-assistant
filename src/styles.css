@@ -330,3 +330,11 @@ button.icon.danger:hover:not(:disabled) { color: var(--coral); }
 .submit-files { display: grid; gap: 8px; justify-items: start; }
 .submit-files .list { width: 100%; }
 @media (max-width: 900px) { .picker-layout, .content.split { grid-template-columns: 1fr; } .course-nav { width: 160px; } }
+.tool-chip { flex-wrap: wrap; max-width: 100%; }
+.tool-chip:has(.tool-error[open]) { border-radius: 12px; }
+.tool-error summary { cursor: pointer; text-decoration: underline; }
+.tool-error span { display: block; margin-top: 4px; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+.pre.code { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 12.5px; line-height: 1.5; letter-spacing: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; max-height: 420px; overflow: auto; tab-size: 4; }
+.submission-content { display: flex; flex-direction: column; gap: 8px; margin: 8px 0; }
+.submission-content details summary { cursor: pointer; padding: 4px 0; }
+.stack { display: flex; flex-direction: column; gap: 8px; }

@@ -3,7 +3,7 @@ import { api } from "../api";
 import { useApp } from "../App";
 import { Banner, open, Spinner } from "../components";
 import { useLoad } from "../shared";
-import { Announcements, Assignments, Discussions, Files, Grades, Home, Modules, Pages, People, Quizzes, Syllabus } from "./CoursePanels";
+import { Announcements, Assignments, Discussions, Files, Grades, Home, LearningX, Modules, Pages, People, Quizzes, Syllabus } from "./CoursePanels";
 
 export type Course = { id: string; name: string; course_code?: string; term?: string; computed_current_score?: number; computed_current_grade?: string; html_url?: string };
 type Tab = { id: string; label: string; type?: string; html_url?: string; full_url?: string };
@@ -46,9 +46,9 @@ export default function CourseView({ course, back }: { course: Course; back: () 
           {course.term && <div className="muted small course-term">{course.term}</div>}
           {tabs.loading ? <Spinner /> : list.map((t) => (
             <button key={t.id} className={"course-tab" + (active === t.id ? " active" : "")} onClick={() => setActive(t.id)} aria-current={active === t.id ? "page" : undefined}>
-              <span aria-hidden>{icons[t.id] ?? (t.type === "external" ? "🔗" : "•")}</span>
+              <span aria-hidden>{icons[t.id] ?? (isMaterials(t) ? "📁" : t.type === "external" ? "🔗" : "•")}</span>
               <span className="grow">{t.label}</span>
-              {!built.has(t.id) && <span className="muted small" aria-label="브라우저에서 열림">↗</span>}
+              {!built.has(t.id) && !isMaterials(t) && <span className="muted small" aria-label="브라우저에서 열림">↗</span>}
             </button>
           ))}
           {tabs.error && <p className="muted small">학교 메뉴 정보를 불러오지 못해 기본 메뉴를 보여줍니다.</p>}
@@ -75,9 +75,13 @@ function TabPanel({ tab, course }: { tab: Tab; course: Course }) {
     case "people": return <People course={c} />;
     case "grades": return <Grades course={c} />;
     case "pages": return <Pages course={c} />;
-    default: return <External tab={tab} />;
+    default:
+      return isMaterials(tab) ? <LearningX course={c} label={tab.label} url={tab.full_url || tab.html_url} /> : <External tab={tab} />;
   }
 }
+
+/** LearningX "강의자료실" style tools are read through the LearningX API. */
+const isMaterials = (t: Tab) => t.id.startsWith("context_external_tool_") && /강의\s*자료|자료실|learning\s*x|resource/i.test(t.label);
 
 /** School-added tools (attendance, learning analytics, …) cannot be read through the API. */
 function External({ tab }: { tab: Tab }) {

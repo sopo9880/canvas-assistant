@@ -19,6 +19,8 @@
 | 토론 | `GET /courses/:id/discussion_topics`, `/discussion_topics/:id/view` | ✅ | |
 | 모듈·페이지 | `GET /courses/:id/modules?include[]=items`, `/pages/:url` | ✅ | |
 | 파일·폴더 | `GET /courses/:id/files`, `/folders`, `GET /files/:id` | ✅ | 다운로드 포함 |
+| 파일 내용 | `GET /files/:id` → `url` 내려받기 → 텍스트 추출 | ✅ | PDF, docx, pptx, xlsx, hwp, hwpx, 코드, zip, ipynb |
+| 내 제출물 내용 | `GET .../submissions/self?include[]=submission_history` → 첨부 `url` | ✅ | 차수(attempt)별 |
 | 캘린더 | `GET /calendar_events?context_codes[]&type=event|assignment` | ✅ | |
 | 성적 | `GET /users/self/enrollments` (`grades`) | ✅ | |
 | 메시지함 | `GET /conversations`, `/conversations/:id` | ✅ | 교수·조교 메시지 |
@@ -27,6 +29,18 @@
 | 그룹 | `GET /users/self/groups`, `/groups/:id/users` | ✅ | 조별 과제 |
 | 강의 활동 | `GET /courses/:id/activity_stream`, `/users/self/activity_stream/summary` | ✅ | 새 소식 개수 |
 | 학습 성과 | `GET /courses/:id/outcome_results` | 🟡 (canvas_api_get) | 학교에서 쓸 때만 |
+
+## 1-1. LearningX 강의자료실 (LTI)
+
+일부 학교(동아대 등)는 '강의자료실' 메뉴가 Canvas 파일이 아니라 LearningX(Coursemos) 외부 도구입니다.
+
+1. `GET /courses/:id/tabs` → `context_external_tool_N` 탭 (라벨에 '강의자료' 우선)
+2. `GET /courses/:id/external_tools/sessionless_launch?id=N&launch_type=course_navigation` → 일회용 `url` (토큰 사용)
+3. 그 `url`을 **토큰 없이** 열어 `tool_form` LTI 양식을 읽고, 양식 `action`(예: `/learningx/lti/courseresource`)으로 POST
+4. 응답 쿠키의 `xn_api_token`(없으면 페이지 스크립트에서 찾음)을 `Authorization: Bearer`로 `GET /learningx/api/v1/courses/:id/resources`
+5. 내려받기: `https://cmaker.<학교 도메인>/index.php?module=xn_media_content2013&act=dispXn_media_content2013DownloadContent&content_id=ID` (자료 목록의 URL에서 호스트를 찾음)
+
+쿠키는 메모리에만 두고 20분 뒤 다시 실행합니다. 동영상 같은 웹 콘텐츠는 파일로 받을 수 없어 브라우저로 엽니다.
 
 ## 2. 변경 (학생 권한)
 

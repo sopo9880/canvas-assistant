@@ -13,7 +13,7 @@ import { effortLabels, toolLabels } from "../util";
 type Entry =
   | { kind: "user"; id: string; text: string }
   | { kind: "assistant"; id: string; text: string; done: boolean }
-  | { kind: "tool"; id: string; tool: string; server: string; status: "running" | "done" | "error" };
+  | { kind: "tool"; id: string; tool: string; server: string; status: "running" | "done" | "error"; detail?: string };
 
 type Thread = { id: string; name?: string | null; preview?: string; updatedAt?: number };
 
@@ -31,10 +31,22 @@ function itemToEntry(item: any): Entry | null {
     case "agentMessage":
       return { kind: "assistant", id: item.id, text: item.text ?? "", done: true };
     case "mcpToolCall":
-      return { kind: "tool", id: item.id, tool: item.tool, server: item.server, status: item.status === "failed" || item.error ? "error" : item.status === "inProgress" ? "running" : "done" };
+      return {
+        kind: "tool", id: item.id, tool: item.tool, server: item.server,
+        status: item.status === "failed" || item.error ? "error" : item.status === "inProgress" ? "running" : "done",
+        detail: toolDetail(item),
+      };
     default:
       return null;
   }
+}
+
+/** Error text of a failed tool call, so the user sees why instead of only the AI's summary. */
+function toolDetail(item: any): string | undefined {
+  if (item?.error?.message) return String(item.error.message);
+  if (item?.status !== "failed") return undefined;
+  const text = (item?.result?.content ?? []).map((c: any) => c?.text ?? "").join("\n").trim();
+  return text ? text.slice(0, 600) : undefined;
 }
 
 export default function Chat({ prefill }: { prefill: { text: string; n: number; send?: boolean } | null }) {
@@ -361,6 +373,7 @@ export default function Chat({ prefill }: { prefill: { text: string; n: number; 
               {e.status === "running" ? <span className="spinner" aria-hidden /> : <span aria-hidden>{e.status === "error" ? "⚠" : "✓"}</span>}
               {e.server === "canvas" ? "Canvas · " : `${e.server} · `}{toolLabels[e.tool] ?? e.tool}
               {e.tool.startsWith("propose_") && e.status === "done" && <button className="link" onClick={() => go("approvals")}>승인하러 가기 →</button>}
+              {e.status === "error" && e.detail && <details className="tool-error"><summary>오류 보기</summary><span>{e.detail}</span></details>}
             </div>
           ),
         )}

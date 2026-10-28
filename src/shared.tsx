@@ -6,7 +6,7 @@ import { formatDate, timeLeft } from "./util";
 
 /** A Canvas object the user can right-click, attach to a chat or act on. */
 export type CanvasRef = {
-  kind: "assignment" | "announcement" | "discussion" | "file" | "page" | "quiz" | "course" | "module_item" | "message" | "planner";
+  kind: "assignment" | "announcement" | "discussion" | "file" | "page" | "quiz" | "course" | "module_item" | "message" | "planner" | "material";
   label: string;
   courseId?: string;
   courseName?: string;
@@ -18,14 +18,14 @@ export type CanvasRef = {
 
 export const kindLabel: Record<CanvasRef["kind"], string> = {
   assignment: "과제", announcement: "공지", discussion: "토론", file: "파일", page: "페이지",
-  quiz: "퀴즈", course: "강의", module_item: "모듈 항목", message: "메시지", planner: "할 일",
+  quiz: "퀴즈", course: "강의", module_item: "모듈 항목", message: "메시지", planner: "할 일", material: "강의자료",
 };
 
 /** One line describing a reference for the AI, with the ids it needs for tool calls. */
 export function describeRef(r: CanvasRef): string {
   const ids: string[] = [];
   if (r.courseId) ids.push(`course_id=${r.courseId}`);
-  if (r.id) ids.push(`${r.kind === "assignment" ? "assignment_id" : r.kind === "discussion" || r.kind === "announcement" ? "topic_id" : r.kind === "file" ? "file_id" : r.kind === "quiz" ? "quiz_id" : r.kind === "message" ? "conversation_id" : r.kind === "page" ? "page_url" : "id"}=${r.id}`);
+  if (r.id) ids.push(`${r.kind === "assignment" ? "assignment_id" : r.kind === "discussion" || r.kind === "announcement" ? "topic_id" : r.kind === "file" ? "file_id" : r.kind === "quiz" ? "quiz_id" : r.kind === "message" ? "conversation_id" : r.kind === "page" ? "page_url" : r.kind === "material" ? "content_id" : "id"}=${r.id}`);
   for (const [k, v] of Object.entries(r.extra ?? {})) if (v != null && v !== "") ids.push(`${k}=${v}`);
   const parts = [`${kindLabel[r.kind]} "${r.label}"`, `(${ids.join(", ")})`];
   if (r.courseName) parts.push(`강의: ${r.courseName}`);

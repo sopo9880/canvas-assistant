@@ -9,10 +9,13 @@ use serde_json::{json, Value};
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
-const RESULT_LIMIT: usize = 60_000;
+const RESULT_LIMIT: usize = 100_000;
 const SUPPORTED_PROTOCOLS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 
 pub const INSTRUCTIONS: &str = "Canvas LMS tools for the signed-in student. Read tools return live data from the school's Canvas; canvas_api_get reaches any other read-only endpoint. \
+To read what is inside lecture materials use canvas_read_file (Canvas files) or canvas_learningx_resources + canvas_learningx_read (schools whose 강의자료실 is LearningX); \
+to read the user's own submitted code or reports use canvas_read_submission. \
+If one tool returns an error, report that error and try another tool; it does not mean the other tools are unavailable. \
 Tools whose names start with propose_ never change Canvas directly: they add a request to the user's approval queue in Canvas Assistant, \
 and the change happens only if the user approves it there. Always tell the user that approval is needed after proposing.";
 
@@ -83,6 +86,10 @@ pub fn tool_list() -> Vec<Value> {
         read("canvas_course_people", "People in a course (instructors, TAs, students) with their user ids, e.g. to find message recipients.", json!({"course_id": c(), "search": {"type": "string"}}), &["course_id"]),
         read("canvas_folders", "File folders of a course (강의자료실 structure).", json!({"course_id": c()}), &["course_id"]),
         read("canvas_folder_files", "Files inside one folder.", json!({"folder_id": id_prop("Folder id")}), &["folder_id"]),
+        read("canvas_read_file", "Read the TEXT CONTENT of a Canvas file (lecture slides, PDF, Word, PowerPoint, Excel, HWP/HWPX, source code, ZIP of code, ipynb). Use the id from canvas_list_files, canvas_folder_files, modules (content_id of File items) or attachments. Long files are paged: call again with next_offset.", json!({"file_id": id_prop("File id"), "offset": {"type": "integer", "minimum": 0, "description": "Character offset for long files (from next_offset)."}}), &["file_id"]),
+        read("canvas_read_submission", "Read what the user actually submitted for an assignment: text body, URL and the CONTENT of every submitted file (code, reports, ZIP projects). attempt picks an earlier attempt; file_id + offset continue one long file.", json!({"course_id": c(), "assignment_id": id_prop("Assignment id"), "attempt": {"type": "integer", "minimum": 1}, "file_id": id_prop("One attachment id"), "offset": {"type": "integer", "minimum": 0}}), &["course_id", "assignment_id"]),
+        read("canvas_learningx_resources", "List lecture materials in the course's LearningX '강의자료실' (an external LTI tool many Korean schools use instead of Canvas Files). Returns title, week/section, type and content_id. Use this when canvas_list_files is empty or refused.", json!({"course_id": c()}), &["course_id"]),
+        read("canvas_learningx_read", "Read the TEXT CONTENT of one LearningX material (PDF, PPT, documents, code) by content_id from canvas_learningx_resources. Videos cannot be read. Long files are paged with offset.", json!({"course_id": c(), "content_id": {"type": "string"}, "offset": {"type": "integer", "minimum": 0}}), &["course_id", "content_id"]),
         read("canvas_api_get", "Read-only GET of any Canvas REST API path the student can access, for data the other tools do not cover. path is relative to /api/v1, e.g. 'courses/123/pages' or 'users/self/activity_stream'. query is an object of query parameters (arrays allowed).", json!({"path": {"type": "string"}, "query": {"type": "object"}}), &["path"]),
         prop("propose_submit_files", "Propose submitting files to an assignment (online_upload). You cannot attach files yourself: the user picks their own files in the approval card. Use this when the user wants to hand in a file they made.", json!({"course_id": c(), "assignment_id": id_prop("Assignment id"), "comment": {"type": "string"}, "reason": reason.clone()}), &["course_id", "assignment_id", "reason"]),
         prop("propose_submission_comment", "Propose adding a comment to the user's submission (e.g. a note to the instructor).", json!({"course_id": c(), "assignment_id": id_prop("Assignment id"), "text": {"type": "string"}, "reason": reason.clone()}), &["course_id", "assignment_id", "text", "reason"]),
@@ -221,6 +228,10 @@ pub fn read_tool(client: &canvas::Client, name: &str, args: &Value) -> Result<Va
         "canvas_course_people" => json!(client.course_people(id("course_id")?, args.get("search").and_then(Value::as_str))?),
         "canvas_folders" => json!(client.folders(id("course_id")?)?),
         "canvas_folder_files" => json!(client.folder_files(id("folder_id")?)?),
+        "canvas_read_file" => client.read_file(id("file_id")?, args)?,
+        "canvas_read_submission" => client.read_submission(id("course_id")?, id("assignment_id")?, args)?,
+        "canvas_learningx_resources" => client.learningx_resources(id("course_id")?)?,
+        "canvas_learningx_read" => client.learningx_read(id("course_id")?, args.get("content_id").map(|v| v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string())).unwrap_or_default().trim(), args.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize)?,
         "canvas_api_get" => client.api_get(args.get("path").and_then(Value::as_str).unwrap_or(""), args.get("query").unwrap_or(&Value::Null))?,
         _ => return Err(format!("unknown tool {name}")),
     })
