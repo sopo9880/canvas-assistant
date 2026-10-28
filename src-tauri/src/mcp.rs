@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 const RESULT_LIMIT: usize = 60_000;
 const SUPPORTED_PROTOCOLS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 
-pub const INSTRUCTIONS: &str = "Canvas LMS tools for the signed-in student. Read tools return live data from the school's Canvas. \
+pub const INSTRUCTIONS: &str = "Canvas LMS tools for the signed-in student. Read tools return live data from the school's Canvas; canvas_api_get reaches any other read-only endpoint. \
 Tools whose names start with propose_ never change Canvas directly: they add a request to the user's approval queue in Canvas Assistant, \
 and the change happens only if the user approves it there. Always tell the user that approval is needed after proposing.";
 
@@ -28,7 +28,7 @@ pub fn tool_list() -> Vec<Value> {
     let ro = json!({"readOnlyHint": true, "openWorldHint": true});
     let propose = json!({"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false});
     let reason = json!({"type": "string", "description": "Why this change is being proposed, shown to the user (Korean)."});
-    vec![
+    let mut tools = vec![
         json!({"name": "canvas_profile", "description": "The signed-in Canvas user's profile (name, time zone).", "inputSchema": schema(json!({}), &[]), "annotations": ro}),
         json!({"name": "canvas_list_courses", "description": "List the user's courses with current scores. Use the returned id as course_id for other tools.",
             "inputSchema": schema(json!({"include_past": {"type": "boolean", "description": "Include finished courses."}}), &[]), "annotations": ro}),
@@ -62,7 +62,38 @@ pub fn tool_list() -> Vec<Value> {
             "inputSchema": schema(json!({"title": {"type": "string"}, "todo_date": {"type": "string", "description": "ISO 8601 date-time"}, "details": {"type": "string"}, "course_id": id_prop("Optional course id"), "reason": reason}), &["title", "todo_date", "reason"]), "annotations": propose}),
         json!({"name": "propose_calendar_event", "description": "Propose adding an event to the user's personal Canvas calendar. Requires user approval.",
             "inputSchema": schema(json!({"title": {"type": "string"}, "start_at": {"type": "string", "description": "ISO 8601 date-time"}, "end_at": {"type": "string"}, "description": {"type": "string"}, "reason": reason}), &["title", "start_at", "reason"]), "annotations": propose}),
-    ]
+    ];
+    let c = || id_prop("Course id");
+    let read = |name: &str, desc: &str, props: Value, req: &[&str]| json!({"name": name, "description": desc, "inputSchema": schema(props, req), "annotations": ro.clone()});
+    let prop = |name: &str, desc: &str, props: Value, req: &[&str]| json!({"name": name, "description": desc, "inputSchema": schema(props, req), "annotations": propose.clone()});
+    tools.extend([
+        read("canvas_course_tabs", "The course menu exactly as the school configured it (Home, Syllabus, Files, Modules, external tools such as attendance). Use it to understand where things live in a course.", json!({"course_id": c()}), &["course_id"]),
+        read("canvas_course_home", "Course front page, default view and recent activity.", json!({"course_id": c()}), &["course_id"]),
+        read("canvas_syllabus", "The course syllabus (수업 계획서) as text: grading policy, schedule, exams.", json!({"course_id": c()}), &["course_id"]),
+        read("canvas_planner", "Planner items (assignments, quizzes, discussions, pages, notes) by date with completion and submission state.", json!({"days_back": {"type": "integer", "minimum": 0, "maximum": 60}, "days_ahead": {"type": "integer", "minimum": 1, "maximum": 120}}), &[]),
+        read("canvas_assignment_groups", "Assignment groups with grade weights and each assignment's score. Use for grade breakdowns and what matters most.", json!({"course_id": c()}), &["course_id"]),
+        read("canvas_my_submission", "The user's own submission for one assignment: attempt history, attached files, instructor comments and rubric assessment.", json!({"course_id": c(), "assignment_id": id_prop("Assignment id")}), &["course_id", "assignment_id"]),
+        read("canvas_discussion_thread", "A discussion topic with its full text and all replies (author, message).", json!({"course_id": c(), "topic_id": id_prop("Discussion topic id")}), &["course_id", "topic_id"]),
+        read("canvas_conversations", "Canvas inbox conversations.", json!({"scope": {"type": "string", "enum": ["inbox", "unread", "starred", "sent", "archived"]}}), &[]),
+        read("canvas_conversation", "Messages of one inbox conversation.", json!({"conversation_id": id_prop("Conversation id")}), &["conversation_id"]),
+        read("canvas_quizzes", "Quizzes and surveys of a course (time limit, attempts, due dates). Taking quizzes is done by the student in Canvas.", json!({"course_id": c()}), &["course_id"]),
+        read("canvas_peer_reviews", "Peer reviews assigned for an assignment.", json!({"course_id": c(), "assignment_id": id_prop("Assignment id")}), &["course_id", "assignment_id"]),
+        read("canvas_groups", "The user's groups (team projects).", json!({}), &[]),
+        read("canvas_group_members", "Members of a group.", json!({"group_id": id_prop("Group id")}), &["group_id"]),
+        read("canvas_course_people", "People in a course (instructors, TAs, students) with their user ids, e.g. to find message recipients.", json!({"course_id": c(), "search": {"type": "string"}}), &["course_id"]),
+        read("canvas_folders", "File folders of a course (강의자료실 structure).", json!({"course_id": c()}), &["course_id"]),
+        read("canvas_folder_files", "Files inside one folder.", json!({"folder_id": id_prop("Folder id")}), &["folder_id"]),
+        read("canvas_api_get", "Read-only GET of any Canvas REST API path the student can access, for data the other tools do not cover. path is relative to /api/v1, e.g. 'courses/123/pages' or 'users/self/activity_stream'. query is an object of query parameters (arrays allowed).", json!({"path": {"type": "string"}, "query": {"type": "object"}}), &["path"]),
+        prop("propose_submit_files", "Propose submitting files to an assignment (online_upload). You cannot attach files yourself: the user picks their own files in the approval card. Use this when the user wants to hand in a file they made.", json!({"course_id": c(), "assignment_id": id_prop("Assignment id"), "comment": {"type": "string"}, "reason": reason.clone()}), &["course_id", "assignment_id", "reason"]),
+        prop("propose_submission_comment", "Propose adding a comment to the user's submission (e.g. a note to the instructor).", json!({"course_id": c(), "assignment_id": id_prop("Assignment id"), "text": {"type": "string"}, "reason": reason.clone()}), &["course_id", "assignment_id", "text", "reason"]),
+        prop("propose_planner_complete", "Propose marking a planner item complete (or not complete).", json!({"plannable_type": {"type": "string", "enum": ["assignment", "quiz", "discussion_topic", "wiki_page", "announcement", "planner_note", "calendar_event"]}, "plannable_id": id_prop("Item id"), "complete": {"type": "boolean"}, "reason": reason.clone()}), &["plannable_type", "plannable_id", "reason"]),
+        prop("propose_module_item_done", "Propose marking a module item as done (or undone).", json!({"course_id": c(), "module_id": id_prop("Module id"), "item_id": id_prop("Module item id"), "done": {"type": "boolean"}, "reason": reason.clone()}), &["course_id", "module_id", "item_id", "reason"]),
+        prop("propose_discussion_entry_reply", "Propose replying to a specific discussion entry.", json!({"course_id": c(), "topic_id": id_prop("Topic id"), "entry_id": id_prop("Entry id"), "message": {"type": "string"}, "reason": reason.clone()}), &["course_id", "topic_id", "entry_id", "message", "reason"]),
+        prop("propose_discussion_mark_read", "Propose marking all entries of a discussion or announcement as read.", json!({"course_id": c(), "topic_id": id_prop("Topic id"), "reason": reason.clone()}), &["course_id", "topic_id", "reason"]),
+        prop("propose_send_message", "Propose sending a Canvas inbox message (e.g. to the instructor). Get recipient user ids from canvas_course_people.", json!({"recipients": {"type": "array", "items": {"type": ["integer", "string"]}}, "subject": {"type": "string"}, "body": {"type": "string"}, "course_id": id_prop("Course id for context"), "reason": reason.clone()}), &["recipients", "subject", "body", "reason"]),
+        prop("propose_what_if", "Propose entering a hypothetical (what-if) score for one of the user's submissions to see the projected course grade. Use the submission id from canvas_assignment_groups.", json!({"submission_id": id_prop("Submission id"), "score": {"type": "number"}, "reason": reason.clone()}), &["submission_id", "score", "reason"]),
+    ]);
+    tools
 }
 
 fn course_ids(args: &Value, client: &canvas::Client) -> Result<Vec<u64>, String> {
@@ -76,6 +107,9 @@ fn proposal_payload(kind: &str, args: &Value) -> Result<Value, String> {
     let mut payload = args.clone();
     if let Some(obj) = payload.as_object_mut() {
         obj.remove("reason");
+        // The AI never chooses local files to upload; the user attaches them in the approval card.
+        obj.remove("files");
+        obj.retain(|k, _| !k.starts_with('_'));
     }
     // Validate the same way the executor will, so bad proposals fail early.
     match kind {
@@ -83,9 +117,35 @@ fn proposal_payload(kind: &str, args: &Value) -> Result<Value, String> {
             canvas::require_id(&payload, "course_id")?;
             canvas::require_id(&payload, "assignment_id")?;
         }
-        "discussion_reply" => {
+        "discussion_reply" | "discussion_mark_read" => {
             canvas::require_id(&payload, "course_id")?;
             canvas::require_id(&payload, "topic_id")?;
+        }
+        "submit_files" | "submission_comment" => {
+            canvas::require_id(&payload, "course_id")?;
+            canvas::require_id(&payload, "assignment_id")?;
+        }
+        "discussion_entry_reply" => {
+            for k in ["course_id", "topic_id", "entry_id"] {
+                canvas::require_id(&payload, k)?;
+            }
+        }
+        "module_item_done" => {
+            for k in ["course_id", "module_id", "item_id"] {
+                canvas::require_id(&payload, k)?;
+            }
+        }
+        "planner_complete" => {
+            canvas::require_id(&payload, "plannable_id")?;
+        }
+        "what_if" => {
+            canvas::require_id(&payload, "submission_id")?;
+        }
+        "send_message" => {
+            let n = payload.get("recipients").and_then(Value::as_array).map(|a| a.len()).unwrap_or(0);
+            if n == 0 || n > 20 {
+                return Err("받는 사람을 1~20명 지정하세요".into());
+            }
         }
         _ => {}
     }
@@ -145,6 +205,23 @@ pub fn read_tool(client: &canvas::Client, name: &str, args: &Value) -> Result<Va
             let ids = course_ids(args, client)?;
             json!(client.calendar(&ids, args.get("days_ahead").and_then(Value::as_i64).unwrap_or(14))?)
         }
+        "canvas_course_tabs" => json!(client.tabs(id("course_id")?)?),
+        "canvas_course_home" => client.course_home(id("course_id")?)?,
+        "canvas_syllabus" => client.syllabus(id("course_id")?)?,
+        "canvas_planner" => json!(client.planner(args.get("days_back").and_then(Value::as_i64).unwrap_or(3), args.get("days_ahead").and_then(Value::as_i64).unwrap_or(21))?),
+        "canvas_assignment_groups" => json!(client.assignment_groups(id("course_id")?)?),
+        "canvas_my_submission" => client.my_submission(id("course_id")?, id("assignment_id")?)?,
+        "canvas_discussion_thread" => client.discussion_thread(id("course_id")?, id("topic_id")?)?,
+        "canvas_conversations" => json!(client.conversations(args.get("scope").and_then(Value::as_str).unwrap_or("inbox"))?),
+        "canvas_conversation" => client.conversation(id("conversation_id")?)?,
+        "canvas_quizzes" => json!(client.quizzes(id("course_id")?)?),
+        "canvas_peer_reviews" => json!(client.peer_reviews(id("course_id")?, id("assignment_id")?)?),
+        "canvas_groups" => json!(client.groups()?),
+        "canvas_group_members" => json!(client.group_members(id("group_id")?)?),
+        "canvas_course_people" => json!(client.course_people(id("course_id")?, args.get("search").and_then(Value::as_str))?),
+        "canvas_folders" => json!(client.folders(id("course_id")?)?),
+        "canvas_folder_files" => json!(client.folder_files(id("folder_id")?)?),
+        "canvas_api_get" => client.api_get(args.get("path").and_then(Value::as_str).unwrap_or(""), args.get("query").unwrap_or(&Value::Null))?,
         _ => return Err(format!("unknown tool {name}")),
     })
 }
@@ -153,7 +230,7 @@ pub fn read_tool(client: &canvas::Client, name: &str, args: &Value) -> Result<Va
 pub fn call_tool(data_dir: &Path, name: &str, args: &Value) -> (String, bool) {
     let result: Result<Value, String> = (|| {
         if let Some(kind) = name.strip_prefix("propose_") {
-            if !canvas::WRITE_KINDS.contains(&kind) {
+            if !canvas::WRITE_KINDS.contains(&kind) || matches!(kind, "what_if_reset" | "conversation_read" | "module_item_read") {
                 return Err(format!("unknown tool {name}"));
             }
             let mut payload = proposal_payload(kind, args)?;
@@ -298,6 +375,21 @@ mod tests {
         assert!(err);
         let (_, err) = call_tool(&d, "propose_delete_everything", &json!({}));
         assert!(err);
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn ai_cannot_choose_files_to_upload() {
+        let d = dir();
+        let (text, err) = call_tool(&d, "propose_submit_files", &json!({"course_id": 1, "assignment_id": 2, "files": ["C:\\Users\\me\\secret.txt"], "_course_name": "x", "reason": "제출"}));
+        assert!(!err, "{text}");
+        let db = Db::open(&d).unwrap();
+        let p = &db.list_pending(false).unwrap()[0];
+        assert!(p["payload"].get("files").is_none(), "file paths from the AI must be dropped");
+        assert!(p["summary"].as_str().unwrap().contains("파일 첨부 필요"));
+        let (_, err) = call_tool(&d, "propose_what_if_reset", &json!({"course_id": 1, "reason": "x"}));
+        assert!(err, "user-only actions are not proposable");
+        assert!(tool_list().len() >= 40);
         let _ = std::fs::remove_dir_all(d);
     }
 

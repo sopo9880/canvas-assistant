@@ -1,5 +1,6 @@
 //! Canvas Assistant: a Windows desktop assistant for Canvas LMS powered by Codex.
 pub mod canvas;
+pub mod canvas_ext;
 pub mod codex;
 pub mod config;
 pub mod db;
@@ -224,8 +225,52 @@ async fn pending_list(state: Shared<'_>, include_done: bool) -> Result<Vec<Value
     blocking(move || s.db.lock().map_err(|_| "db busy".to_string())?.list_pending(include_done)).await
 }
 
+/// Fields the user may change on a proposal before approving it.
+pub fn apply_edits(kind: &str, payload: &mut Value, edits: &Value) -> Result<(), String> {
+    let Some(edits) = edits.as_object() else { return Ok(()) };
+    let allowed: &[&str] = match kind {
+        "submit_text" => &["body", "comment"],
+        "submit_url" => &["url", "comment"],
+        "submit_files" => &["files", "comment"],
+        "submission_comment" => &["text"],
+        "discussion_reply" | "discussion_entry_reply" => &["message"],
+        "send_message" => &["subject", "body"],
+        "planner_note" => &["title", "details", "todo_date"],
+        "calendar_event" => &["title", "start_at", "end_at", "description"],
+        _ => &[],
+    };
+    for (k, v) in edits {
+        if !allowed.contains(&k.as_str()) {
+            return Err(format!("이 요청에서는 '{k}'을(를) 바꿀 수 없습니다"));
+        }
+        if k == "files" {
+            let files = v.as_array().ok_or("files는 목록이어야 합니다")?;
+            for f in files {
+                let path = f.as_str().ok_or("파일 경로가 올바르지 않습니다")?;
+                if !std::path::Path::new(path).is_file() {
+                    return Err(format!("파일을 찾을 수 없습니다: {path}"));
+                }
+            }
+        } else if !v.is_string() {
+            return Err(format!("'{k}' 값이 올바르지 않습니다"));
+        }
+        payload[k.as_str()] = v.clone();
+    }
+    Ok(())
+}
+
+fn execute_logged(s: &AppState, db: &db::Db, kind: &str, payload: &Value, label: &str) -> Result<Value, String> {
+    let summary = canvas::describe_write(kind, payload);
+    let result = config::canvas_client(&s.data_dir).and_then(|c| c.execute_write(kind, payload).map_err(String::from));
+    match &result {
+        Ok(_) => db.audit(label, &summary, true),
+        Err(e) => db.audit(label, &format!("{summary} — 실패: {e}"), false),
+    }
+    result
+}
+
 #[tauri::command]
-async fn pending_decide(app: AppHandle, state: Shared<'_>, id: i64, approve: bool) -> Result<Value, String> {
+async fn pending_decide(app: AppHandle, state: Shared<'_>, id: i64, approve: bool, edits: Option<Value>) -> Result<Value, String> {
     let s = state.inner().clone();
     let out = blocking(move || {
         let db = db::Db::open(&s.data_dir)?;
@@ -234,24 +279,66 @@ async fn pending_decide(app: AppHandle, state: Shared<'_>, id: i64, approve: boo
             db.audit("reject", &format!("요청 #{id} 거절"), true);
             return Ok(json!({"status": "rejected"}));
         }
-        let (kind, payload) = db.claim_pending(id)?;
-        let summary = canvas::describe_write(&kind, &payload);
-        let result = config::canvas_client(&s.data_dir).and_then(|c| c.execute_write(&kind, &payload).map_err(String::from));
-        match result {
+        let (kind, mut payload) = db.claim_pending(id)?;
+        if let Err(e) = apply_edits(&kind, &mut payload, edits.as_ref().unwrap_or(&Value::Null)) {
+            // Return the request to the queue so the user can fix it.
+            db.finish_pending(id, "pending", "")?;
+            return Err(e);
+        }
+        match execute_logged(&s, &db, &kind, &payload, "execute") {
             Ok(r) => {
                 db.finish_pending(id, "done", &r.to_string())?;
-                db.audit("execute", &summary, true);
                 Ok(json!({"status": "done", "result": r}))
             }
             Err(e) => {
                 db.finish_pending(id, "failed", &e)?;
-                db.audit("execute", &format!("{summary} — 실패: {e}"), false);
                 Err(e)
             }
         }
     }).await;
     let _ = app.emit("pending-changed", json!({}));
     out
+}
+
+/// A Canvas change the user started from the app's own UI (after a confirmation there).
+#[tauri::command]
+async fn canvas_action(state: Shared<'_>, kind: String, params: Value) -> Result<Value, String> {
+    let s = state.inner().clone();
+    blocking(move || {
+        if !canvas::WRITE_KINDS.contains(&kind.as_str()) {
+            return Err("지원하지 않는 작업입니다".into());
+        }
+        if let Some(files) = params.get("files").and_then(Value::as_array) {
+            for f in files {
+                if !f.as_str().is_some_and(|p| std::path::Path::new(p).is_file()) {
+                    return Err(format!("파일을 찾을 수 없습니다: {f}"));
+                }
+            }
+        }
+        let db = db::Db::open(&s.data_dir)?;
+        execute_logged(&s, &db, &kind, &params, "user_action")
+    }).await
+}
+
+/// Opens the Windows file picker and returns the chosen paths with sizes.
+#[tauri::command]
+async fn pick_files(app: AppHandle, extensions: Option<Vec<String>>) -> Result<Vec<Value>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    blocking(move || {
+        let mut dialog = app.dialog().file().set_title("제출할 파일 선택");
+        let exts: Vec<String> = extensions.unwrap_or_default().into_iter()
+            .map(|e| e.trim().trim_start_matches('.').to_ascii_lowercase())
+            .filter(|e| !e.is_empty() && e.len() <= 10 && e.chars().all(|c| c.is_ascii_alphanumeric())).collect();
+        if !exts.is_empty() {
+            let refs: Vec<&str> = exts.iter().map(String::as_str).collect();
+            dialog = dialog.add_filter("허용된 파일", &refs);
+        }
+        let picked = dialog.blocking_pick_files().unwrap_or_default();
+        Ok(picked.into_iter().filter_map(|f| f.into_path().ok()).map(|p| {
+            let size = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+            json!({"path": p.to_string_lossy(), "name": p.file_name().and_then(|n| n.to_str()).unwrap_or(""), "size": size})
+        }).collect())
+    }).await
 }
 
 #[tauri::command]
@@ -401,6 +488,7 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--minimized"])))
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
@@ -444,7 +532,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             app_info, settings_save, check_update,
             canvas_connect, canvas_disconnect, canvas_query, canvas_download,
-            pending_list, pending_decide, audit_list,
+            pending_list, pending_decide, canvas_action, pick_files, audit_list,
             jobs_list, jobs_update, jobs_run_now, briefings_list,
             codex_start, codex_call, codex_locate, codex_diagnose, open_external
         ])
@@ -459,7 +547,18 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::version_newer;
+    use super::{apply_edits, version_newer};
+    use serde_json::json;
+
+    #[test]
+    fn proposal_edits_are_limited() {
+        let mut p = json!({"course_id": 1, "assignment_id": 2, "body": "old"});
+        apply_edits("submit_text", &mut p, &json!({"body": "new", "comment": "c"})).unwrap();
+        assert_eq!(p["body"], "new");
+        assert!(apply_edits("submit_text", &mut p, &json!({"course_id": 9})).is_err());
+        assert!(apply_edits("submit_files", &mut p, &json!({"files": ["/definitely/not/here.pdf"]})).is_err());
+        assert!(apply_edits("planner_complete", &mut p, &json!({"complete": false})).is_err());
+    }
 
     #[test]
     fn compares_versions() {

@@ -177,6 +177,9 @@ fn developer_instructions() -> String {
          - 강의, 과제, 공지, 성적, 제출물, 파일, 일정에 대한 질문은 canvas 도구로 실제 데이터를 조회한 뒤 답하세요. 추측하지 마세요.\n\
          - 날짜는 사용자의 현지 시간으로 바꿔서 알려주세요. 마감까지 남은 시간도 함께 알려주면 좋습니다.\n\
          - propose_ 로 시작하는 도구는 Canvas를 바로 바꾸지 않고 사용자의 '승인 대기' 목록에 요청을 올립니다. 제안한 뒤에는 앱에서 승인해야 실행된다고 반드시 안내하세요.\n\
+         - 과제 분석을 요청받으면: canvas_planner나 canvas_upcoming으로 대상을 찾고, 과제마다 canvas_get_assignment(설명·루브릭·허용 형식·제출 횟수), canvas_assignment_groups(배점 비중), 필요하면 canvas_my_submission(이전 제출·피드백)과 canvas_syllabus를 확인하세요. 마감 순서로 표를 만들고, 과제별로 해야 할 일, 채점 기준(루브릭), 제출 방식, 성적 비중을 정리하세요.\n\
+         - 사용자가 메시지에 [첨부된 Canvas 항목]이나 [도구 결과]를 붙이면 그 ID와 데이터를 우선 사용하세요.\n\
+         - 과제 제출을 도와줄 때는 사용자가 만든 결과물(파일, 링크, 사용자가 쓴 글)을 내도록 propose_submit_files / propose_submit_url / propose_submit_text를 쓰세요. 파일은 사용자가 승인 카드에서 직접 첨부합니다.\n\
          - 이 환경은 읽기 전용입니다. 파일 수정이나 명령 실행은 할 수 없습니다.\n\
          - 과제 답안을 대신 작성해 제출하는 등 학업 윤리에 어긋나는 요청은 정중히 거절하고, 이해를 돕는 방식으로 도와주세요.",
         now.format("%Y-%m-%d %H:%M (%A)"),
@@ -292,7 +295,7 @@ pub fn validated_request(method: &str, input: &Value, workspace: &str, mcp: Opti
             }
             Ok(json!({"threadId": safe_identifier(input, "threadId")?, "name": name}))
         }
-        "thread/archive" => Ok(json!({"threadId": safe_identifier(input, "threadId")?})),
+        "thread/archive" | "thread/delete" => Ok(json!({"threadId": safe_identifier(input, "threadId")?})),
         "turn/start" => {
             let text = input.get("text").and_then(Value::as_str).ok_or("Message text is required")?.trim();
             if text.is_empty() || text.len() > 20_000 {

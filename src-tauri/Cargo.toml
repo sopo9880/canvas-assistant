@@ -19,8 +19,9 @@ tauri-plugin-opener = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-single-instance = "2"
+tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
 ureq = { version = "3", features = ["json"] }
 url = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
