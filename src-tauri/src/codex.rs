@@ -73,6 +73,35 @@ fn answer_server_request(id: &Value, method: &str) -> Value {
 
 /// Locates the Codex executable. npm installs `codex.cmd`, which Rust cannot spawn
 /// directly, so the native binary inside the npm package is preferred.
+/// Where the Codex executable came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CodexSource {
+    Custom,
+    Bundled,
+    System,
+}
+
+/// The codex.exe shipped inside the installer (resources/codex/codex.exe).
+pub fn bundled_codex(app: &AppHandle) -> Option<PathBuf> {
+    let exe = if cfg!(windows) { "codex.exe" } else { "codex" };
+    app.path().resource_dir().ok().map(|d| d.join("codex").join(exe)).filter(|p| p.is_file())
+}
+
+/// Resolution order: a path the user set explicitly, the bundled binary, then PATH / npm installs.
+pub fn locate_codex(custom: Option<&str>, bundled: Option<PathBuf>) -> Result<(PathBuf, Vec<String>, CodexSource), String> {
+    if let Some(path) = custom.map(str::trim).filter(|p| !p.is_empty()) {
+        let p = PathBuf::from(path);
+        if p.is_file() {
+            return Ok((p, vec![], CodexSource::Custom));
+        }
+        return Err(format!("설정한 Codex 경로에 파일이 없습니다: {path}"));
+    }
+    if let Some(p) = bundled {
+        return Ok((p, vec![], CodexSource::Bundled));
+    }
+    resolve_codex(None).map(|(p, a)| (p, a, CodexSource::System))
+}
+
 pub fn resolve_codex(custom: Option<&str>) -> Result<(PathBuf, Vec<String>), String> {
     if let Some(path) = custom.map(str::trim).filter(|p| !p.is_empty()) {
         let p = PathBuf::from(path);
@@ -116,13 +145,28 @@ pub fn resolve_codex(custom: Option<&str>) -> Result<(PathBuf, Vec<String>), Str
             }
         }
     }
-    Err("Codex CLI를 찾을 수 없습니다. 'npm install -g @openai/codex'로 설치한 뒤 앱을 다시 시작하거나, 설정에서 codex.exe 경로를 지정하세요.".into())
+    Err("앱에 포함된 Codex를 찾을 수 없습니다. 설치 파일로 앱을 다시 설치하거나, 설정 → 고급에서 codex.exe 경로를 지정하세요.".into())
 }
 
 pub fn workspace_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("codex-workspace");
     std::fs::create_dir_all(&dir).map_err(|e| format!("Codex 작업 폴더를 만들 수 없습니다: {e}"))?;
     Ok(dir)
+}
+
+/// `codex app-server` arguments: stdio transport, login stored in the OS keyring
+/// (Windows Credential Manager) instead of auth.json, and no shell, sub-agents or web search.
+pub fn app_server_args() -> Vec<String> {
+    [
+        "app-server", "--listen", "stdio://",
+        "-c", "cli_auth_credentials_store=\"keyring\"",
+        "-c", "features.shell_tool=false",
+        "-c", "features.multi_agent=false",
+        "-c", "web_search=\"disabled\"",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
 }
 
 fn developer_instructions() -> String {
@@ -325,12 +369,22 @@ impl CodexState {
             return Ok(());
         }
         self.stop();
-        let settings = config::load(&app.path().app_data_dir().map_err(|e| e.to_string())?);
-        let (program, mut args) = resolve_codex(settings.codex_path.as_deref())?;
-        args.push("app-server".into());
+        let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+        let settings = config::load(&data);
+        let (program, mut args, _) = locate_codex(settings.codex_path.as_deref(), bundled_codex(app))?;
+        args.extend(app_server_args());
         let cwd = workspace_dir(app)?;
+        // Canvas Assistant keeps its own Codex home, separate from any Codex CLI/app on this PC.
+        let home = data.join("codex");
+        std::fs::create_dir_all(&home).map_err(|e| format!("Codex 폴더를 만들 수 없습니다: {e}"))?;
         let mut command = Command::new(&program);
-        command.args(&args).current_dir(&cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+        command
+            .args(&args)
+            .current_dir(&cwd)
+            .env("CODEX_HOME", &home)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -494,6 +548,31 @@ pub fn path_display(p: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn locate_prefers_custom_then_bundled() {
+        let dir = std::env::temp_dir().join(format!("ca-codex-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bundled = dir.join("codex.exe");
+        std::fs::write(&bundled, b"x").unwrap();
+        let (p, _, src) = locate_codex(None, Some(bundled.clone())).unwrap();
+        assert_eq!((p, src), (bundled.clone(), CodexSource::Bundled));
+        let custom = dir.join("custom.exe");
+        std::fs::write(&custom, b"x").unwrap();
+        let (p, _, src) = locate_codex(Some(custom.to_str().unwrap()), Some(bundled)).unwrap();
+        assert_eq!((p, src), (custom, CodexSource::Custom));
+        assert!(locate_codex(Some("/nope/codex.exe"), None).is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn app_server_is_locked_down() {
+        let a = app_server_args().join(" ");
+        assert!(a.starts_with("app-server --listen stdio://"));
+        assert!(a.contains("cli_auth_credentials_store=\"keyring\""));
+        assert!(a.contains("features.shell_tool=false"));
+        assert!(a.contains("web_search=\"disabled\""));
+    }
 
     #[test]
     fn whitelist_rejects_unknown_methods() {

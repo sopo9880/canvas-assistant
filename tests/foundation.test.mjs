@@ -49,3 +49,14 @@ test("app icons generated from the logo are committed", () => {
     assert.ok(fs.existsSync(`src-tauri/icons/${f}`), f);
   }
 });
+
+test("the installer bundles a pinned Codex and the bridge locks it down", () => {
+  const pkg = JSON.parse(read("package.json"));
+  assert.match(pkg.codexVersion, /^\d+\.\d+\.\d+$/);
+  const res = JSON.parse(read("src-tauri/tauri.conf.json")).bundle.resources;
+  assert.equal(res["resources/codex/codex.exe"], "codex/codex.exe");
+  const src = read("src-tauri/src/codex.rs");
+  for (const flag of ['cli_auth_credentials_store=\\"keyring\\"', "features.shell_tool=false", 'web_search=\\"disabled\\"', '"CODEX_HOME"']) {
+    assert.ok(src.includes(flag), flag);
+  }
+});

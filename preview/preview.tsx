@@ -53,13 +53,14 @@ mockIPC((cmd, args: any) => {
     case "app_info": return { version: "0.1.0", dataDir: "C:\\Users\\sopo\\AppData\\Roaming\\com.sopo9880.canvasassistant", hasToken: true, pending: 2,
       settings: { canvasBaseUrl: "https://canvas.example.ac.kr", closeToTray: true, notifications: true, codexPath: null, defaultModel: null, defaultEffort: null, canvasToolsInChat: true } };
     case "codex_start": return null;
-    case "codex_locate": return { found: true, path: "C:\\Users\\sopo\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\...\\codex.exe" };
+    case "codex_locate": return { found: true, source: "bundled", path: "C:\\Users\\sopo\\AppData\\Local\\Canvas Assistant\\codex\\codex.exe" };
     case "codex_call": {
       const m = args.method;
       if (m === "account/read") return { account: loggedIn ? { type: "chatgpt", email: "student@example.com", planType: "plus" } : null };
       if (m === "model/list") return { data: [{ id: "gpt-6.1-sol", model: "gpt-6.1-sol", displayName: "GPT-6.1-Sol", isDefault: true, defaultReasoningEffort: "medium", supportedReasoningEfforts: [{ reasoningEffort: "low" }, { reasoningEffort: "medium" }, { reasoningEffort: "high" }] }] };
       if (m === "thread/list") { threadsCalled = true; return { data: [{ id: "t1", name: "이번 주 과제 정리", updatedAt: 1 }, { id: "t2", name: "원자로이론 HW8 개념 질문", updatedAt: 1 }, { id: "t3", preview: "열전달 핀 효율 공식이 왜 tanh가 나와?", updatedAt: 1 }] }; }
       if (m === "thread/resume") return {};
+      if (m === "account/login/start") return args.params.type === "chatgpt" ? { type: "chatgpt", loginId: "l1", authUrl: "https://auth.openai.com/x" } : { type: "chatgptDeviceCode", loginId: "l2", userCode: "ABCD-1234", verificationUrl: "https://auth.openai.com/codex/device" };
       if (m === "thread/turns/list") return { data: [{ items: [
         { type: "agentMessage", id: "i4", text: answer },
         { type: "mcpToolCall", id: "i3b", server: "canvas", tool: "propose_planner_note", status: "completed" },

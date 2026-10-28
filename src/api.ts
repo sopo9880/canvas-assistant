@@ -67,7 +67,7 @@ export const api = {
   runJob: (kind: string) => invoke<void>("jobs_run_now", { kind }),
   briefings: () => invoke<Array<{ id: number; at: number; text: string }>>("briefings_list"),
   codexStart: () => invoke<void>("codex_start"),
-  codexLocate: () => invoke<{ found: boolean; path?: string; viaNode?: boolean; error?: string }>("codex_locate"),
+  codexLocate: () => invoke<{ found: boolean; path?: string; viaNode?: boolean; error?: string; source?: string }>("codex_locate"),
   codex: <T = any>(method: string, params: Record<string, unknown> = {}) => invoke<T>("codex_call", { method, params }),
 };
 

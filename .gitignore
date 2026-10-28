@@ -13,3 +13,4 @@ src-tauri/target/
 *.pem
 src-tauri/gen/schemas/
 release/
+src-tauri/resources/codex/

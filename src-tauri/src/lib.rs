@@ -324,10 +324,15 @@ async fn codex_call(app: AppHandle, state: Shared<'_>, method: String, params: V
 }
 
 #[tauri::command]
-fn codex_locate(state: Shared<'_>) -> Value {
+fn codex_locate(app: AppHandle, state: Shared<'_>) -> Value {
     let settings = config::load(&state.data_dir);
-    match codex::resolve_codex(settings.codex_path.as_deref()) {
-        Ok((p, args)) => json!({"found": true, "path": p.to_string_lossy(), "viaNode": !args.is_empty()}),
+    match codex::locate_codex(settings.codex_path.as_deref(), codex::bundled_codex(&app)) {
+        Ok((p, args, source)) => json!({
+            "found": true,
+            "path": p.to_string_lossy(),
+            "viaNode": !args.is_empty(),
+            "source": match source { codex::CodexSource::Bundled => "bundled", codex::CodexSource::Custom => "custom", codex::CodexSource::System => "system" },
+        }),
         Err(e) => json!({"found": false, "error": e}),
     }
 }
