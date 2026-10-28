@@ -707,7 +707,7 @@ pub fn describe_write(kind: &str, p: &Value) -> String {
 pub const WRITE_KINDS: &[&str] = &[
     "submit_text", "submit_url", "submit_files", "submission_comment", "discussion_reply", "discussion_entry_reply",
     "discussion_mark_read", "planner_note", "planner_complete", "calendar_event", "module_item_done", "module_item_read",
-    "send_message", "what_if", "what_if_reset", "conversation_read",
+    "send_message", "conversation_reply", "what_if", "what_if_reset", "conversation_read",
 ];
 
 #[cfg(test)]

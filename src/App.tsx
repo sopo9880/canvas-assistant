@@ -7,8 +7,17 @@ import CanvasView from "./views/Canvas";
 import Approvals from "./views/Approvals";
 import Automation from "./views/Automation";
 import SettingsView from "./views/Settings";
+import Messages from "./views/Messages";
+import { CanvasRef } from "./shared";
+import ContextMenu, { MenuState } from "./ContextMenu";
+import SubmitDialog from "./SubmitDialog";
 
-export type Tab = "chat" | "canvas" | "approvals" | "automation" | "settings";
+export type Tab = "chat" | "canvas" | "messages" | "approvals" | "automation" | "settings";
+
+/** Something attached to the next chat message. */
+export type Attachment =
+  | { type: "ref"; key: string; ref: CanvasRef }
+  | { type: "tool"; key: string; tool: string; label: string; args: Record<string, unknown>; mode: "result" | "instruct"; result?: unknown };
 
 export type CodexStatus = {
   state: "starting" | "ready" | "error";
@@ -36,8 +45,14 @@ type Ctx = {
   connectCodex: () => Promise<void>;
   refreshAccount: () => Promise<void>;
   go: (tab: Tab) => void;
-  askAI: (prompt: string) => void;
+  askAI: (prompt: string, opts?: { send?: boolean; refs?: CanvasRef[] }) => void;
   pendingCount: number;
+  attachments: Attachment[];
+  addAttachment: (a: Attachment) => void;
+  removeAttachment: (key: string) => void;
+  clearAttachments: () => void;
+  openMenu: (e: { clientX: number; clientY: number; preventDefault: () => void }, ref: CanvasRef) => void;
+  openSubmit: (ref: CanvasRef) => void;
 };
 
 const AppContext = createContext<Ctx | null>(null);
@@ -48,7 +63,10 @@ export default function App() {
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [codex, setCodex] = useState<CodexStatus>({ state: "starting" });
   const [pendingCount, setPendingCount] = useState(0);
-  const [prefill, setPrefill] = useState<{ text: string; n: number } | null>(null);
+  const [prefill, setPrefill] = useState<{ text: string; n: number; send?: boolean } | null>(null);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [menu, setMenu] = useState<MenuState>(null);
+  const [submitRef, setSubmitRef] = useState<CanvasRef | null>(null);
   const retries = useRef(0);
   const [login, setLogin] = useState<LoginState>(null);
   const [loginError, setLoginError] = useState("");
@@ -139,17 +157,33 @@ export default function App() {
     if (id) { try { await api.codex("account/login/cancel", { loginId: id }); } catch { /* already finished */ } }
   }, []);
 
-  const askAI = useCallback((text: string) => {
-    setPrefill((p) => ({ text, n: (p?.n ?? 0) + 1 }));
+  const addAttachment = useCallback((a: Attachment) => {
+    setAttachments((old) => (old.some((x) => x.key === a.key) ? old : [...old, a].slice(-8)));
+  }, []);
+  const removeAttachment = useCallback((key: string) => setAttachments((old) => old.filter((x) => x.key !== key)), []);
+  const clearAttachments = useCallback(() => setAttachments([]), []);
+
+  const askAI = useCallback((text: string, opts?: { send?: boolean; refs?: CanvasRef[] }) => {
+    for (const ref of opts?.refs ?? []) addAttachment({ type: "ref", key: `${ref.kind}:${ref.courseId}:${ref.id}`, ref });
+    setPrefill((p) => ({ text, n: (p?.n ?? 0) + 1, send: opts?.send }));
     setTab("chat");
+  }, [addAttachment]);
+
+  const openMenu = useCallback((e: { clientX: number; clientY: number; preventDefault: () => void }, ref: CanvasRef) => {
+    e.preventDefault();
+    setMenu({ x: e.clientX, y: e.clientY, ref });
   }, []);
 
-  const ctx: Ctx = { info, login, loginError, startLogin, cancelLogin, refreshInfo, codex, connectCodex, refreshAccount, go: setTab, askAI, pendingCount };
+  const ctx: Ctx = {
+    info, login, loginError, startLogin, cancelLogin, refreshInfo, codex, connectCodex, refreshAccount, go: setTab, askAI, pendingCount,
+    attachments, addAttachment, removeAttachment, clearAttachments, openMenu, openSubmit: setSubmitRef,
+  };
   const canvasReady = !!(info?.hasToken && info.settings.canvasBaseUrl);
 
   const nav: Array<{ id: Tab; label: string; icon: string }> = [
     { id: "chat", label: "AI 대화", icon: "💬" },
     { id: "canvas", label: "Canvas", icon: "📚" },
+    { id: "messages", label: "메시지", icon: "✉️" },
     { id: "approvals", label: "승인 대기", icon: "✋" },
     { id: "automation", label: "자동화", icon: "⏰" },
     { id: "settings", label: "설정", icon: "⚙️" },
@@ -187,11 +221,14 @@ export default function App() {
         <main className="main">
           {tab === "chat" && <Chat prefill={prefill} />}
           {tab === "canvas" && <CanvasView />}
+          {tab === "messages" && <Messages />}
           {tab === "approvals" && <Approvals />}
           {tab === "automation" && <Automation />}
           {tab === "settings" && <SettingsView />}
         </main>
       </div>
+      <ContextMenu state={menu} onClose={() => setMenu(null)} />
+      {submitRef && <SubmitDialog target={submitRef} onClose={() => setSubmitRef(null)} />}
     </AppContext.Provider>
   );
 }

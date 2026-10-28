@@ -230,7 +230,7 @@ pub fn read_tool(client: &canvas::Client, name: &str, args: &Value) -> Result<Va
 pub fn call_tool(data_dir: &Path, name: &str, args: &Value) -> (String, bool) {
     let result: Result<Value, String> = (|| {
         if let Some(kind) = name.strip_prefix("propose_") {
-            if !canvas::WRITE_KINDS.contains(&kind) || matches!(kind, "what_if_reset" | "conversation_read" | "module_item_read") {
+            if !canvas::WRITE_KINDS.contains(&kind) || matches!(kind, "what_if_reset" | "conversation_read" | "module_item_read" | "conversation_reply") {
                 return Err(format!("unknown tool {name}"));
             }
             let mut payload = proposal_payload(kind, args)?;

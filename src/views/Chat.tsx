@@ -5,6 +5,9 @@ import { api, errorText, Model } from "../api";
 import { useApp } from "../App";
 import { Banner, Markdown, Spinner } from "../components";
 import CodexLogin from "../CodexLogin";
+import ToolPicker from "../ToolPicker";
+import { composeMessage, splitMessage } from "../toolkit";
+import { describeRef, kindLabel } from "../shared";
 import { effortLabels, toolLabels } from "../util";
 
 type Entry =
@@ -34,8 +37,9 @@ function itemToEntry(item: any): Entry | null {
   }
 }
 
-export default function Chat({ prefill }: { prefill: { text: string; n: number } | null }) {
-  const { codex, info, refreshInfo, go } = useApp();
+export default function Chat({ prefill }: { prefill: { text: string; n: number; send?: boolean } | null }) {
+  const { codex, info, refreshInfo, go, attachments, removeAttachment, clearAttachments } = useApp();
+  const [picker, setPicker] = useState(false);
   const [models, setModels] = useState<Model[]>([]);
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState("");
@@ -55,7 +59,12 @@ export default function Chat({ prefill }: { prefill: { text: string; n: number }
 
   useEffect(() => { setSlot(document.getElementById("sidebar-slot")); }, []);
   useEffect(() => { threadRef.current = threadId; }, [threadId]);
-  useEffect(() => { if (prefill) setDraft(prefill.text); }, [prefill]);
+  const pendingSend = useRef<number | null>(null);
+  useEffect(() => {
+    if (!prefill) return;
+    setDraft(prefill.text);
+    if (prefill.send) pendingSend.current = prefill.n;
+  }, [prefill]);
 
   const loadThreads = useCallback(async () => {
     try {
@@ -189,11 +198,13 @@ export default function Chat({ prefill }: { prefill: { text: string; n: number }
   }
 
   async function send(textArg?: string) {
-    const text = (textArg ?? draft).trim();
-    if (!text || busy || !ready) return;
+    const typed = (textArg ?? draft).trim();
+    if ((!typed && attachments.length === 0) || busy || !ready) return;
+    const text = composeMessage(typed, attachments);
     setBusy(true);
     setError("");
     setDraft("");
+    clearAttachments();
     stick.current = true;
     setEntries((old) => [...old, { kind: "user", id: `local-${Date.now()}`, text }]);
     try {
@@ -211,6 +222,15 @@ export default function Chat({ prefill }: { prefill: { text: string; n: number }
       setError(errorText(e));
     }
   }
+
+  // "AI로 바로 분석" from a right-click menu sends as soon as the chat is ready.
+  useEffect(() => {
+    if (pendingSend.current != null && ready && !busy && draft) {
+      pendingSend.current = null;
+      void send(draft);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, busy, draft, attachments]);
 
   async function interrupt() {
     if (!threadId || !turnId) return;
@@ -232,6 +252,15 @@ export default function Chat({ prefill }: { prefill: { text: string; n: number }
     if (!window.confirm("이 대화를 목록에서 보관할까요?")) return;
     try {
       await api.codex("thread/archive", { threadId: id });
+      if (id === threadId) newChat();
+      await loadThreads();
+    } catch (e) { setError(errorText(e)); }
+  }
+
+  async function remove(id: string) {
+    if (!window.confirm("이 대화를 삭제할까요? 대화 기록이 PC에서도 지워지고 되돌릴 수 없습니다.")) return;
+    try {
+      await api.codex("thread/delete", { threadId: id });
       if (id === threadId) newChat();
       await loadThreads();
     } catch (e) { setError(errorText(e)); }
@@ -259,6 +288,7 @@ export default function Chat({ prefill }: { prefill: { text: string; n: number }
             <span className="thread-actions">
               <button className="ghost icon" title="이름 바꾸기" onClick={() => setRenaming(t.id)}>✎</button>
               <button className="ghost icon" title="보관" onClick={() => void archive(t.id)}>🗄</button>
+              <button className="ghost icon danger" title="삭제" onClick={() => void remove(t.id)}>🗑</button>
             </span>
           </div>
         ))}
@@ -320,7 +350,7 @@ export default function Chat({ prefill }: { prefill: { text: string; n: number }
         )}
         {entries.map((e) =>
           e.kind === "user" ? (
-            <div key={e.id} className="msg user"><div className="bubble">{e.text}</div></div>
+            <UserBubble key={e.id} text={e.text} />
           ) : e.kind === "assistant" ? (
             <div key={e.id} className="msg assistant">
               <Markdown text={e.text} />
@@ -339,7 +369,18 @@ export default function Chat({ prefill }: { prefill: { text: string; n: number }
         )}
       </div>
 
+      {attachments.length > 0 && (
+        <div className="attach-row" aria-label="첨부">
+          {attachments.map((a) => (
+            <span key={a.key} className={"attach-chip" + (a.type === "tool" ? " tool" : "")} title={a.type === "ref" ? describeRef(a.ref) : a.tool}>
+              {a.type === "ref" ? `${kindLabel[a.ref.kind]} · ${a.ref.label}` : (a.mode === "result" ? "🧰 " : "🤖 ") + a.label}
+              <button className="ghost icon" aria-label="첨부 빼기" onClick={() => removeAttachment(a.key)}>✕</button>
+            </span>
+          ))}
+        </div>
+      )}
       <div className="composer">
+        <button className="tool-btn" onClick={() => setPicker(true)} title="Canvas 도구 불러오기" aria-label="Canvas 도구" disabled={!canvasReady}>🧰</button>
         <textarea
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -351,7 +392,26 @@ export default function Chat({ prefill }: { prefill: { text: string; n: number }
         {busy && turnId ? (
           <button className="stop" onClick={() => void interrupt()} title="응답 중단">■</button>
         ) : (
-          <button className="send primary" onClick={() => void send()} disabled={!ready || !draft.trim() || busy} title="보내기">↑</button>
+          <button className="send primary" onClick={() => void send()} disabled={!ready || (!draft.trim() && attachments.length === 0) || busy} title="보내기">↑</button>
+        )}
+      </div>
+      {picker && <ToolPicker onClose={() => setPicker(false)} />}
+    </div>
+  );
+}
+
+function UserBubble({ text }: { text: string }) {
+  const { main, context } = splitMessage(text);
+  const count = context ? (context.match(/^- |^\[도구 결과/gm) ?? []).length : 0;
+  return (
+    <div className="msg user">
+      <div className="bubble">
+        {main}
+        {context && (
+          <details className="bubble-context">
+            <summary>첨부 {count || ""}개 보기</summary>
+            <pre className="pre small">{context.length > 4000 ? context.slice(0, 4000) + "…" : context}</pre>
+          </details>
         )}
       </div>
     </div>

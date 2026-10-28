@@ -488,6 +488,12 @@ impl Client {
                 let course = require_id(p, "course_id")?;
                 Ok(self.put_form(&format!("courses/{course}/what_if_grades/reset"), &[])?)
             }
+            "conversation_reply" => {
+                let id = require_id(p, "conversation_id")?;
+                let body = opt_str(p, "body").ok_or_else(|| CanvasError::Invalid("메시지 내용이 비어 있습니다".into()))?;
+                self.post_form(&format!("conversations/{id}/add_message"), &[("body".into(), body.into())])?;
+                Ok(json!({"ok": true}))
+            }
             "conversation_read" => {
                 let id = require_id(p, "conversation_id")?;
                 self.put_form(&format!("conversations/{id}"), &[("conversation[workflow_state]".into(), "read".into())])?;
@@ -520,6 +526,7 @@ pub fn describe_write_ext(kind: &str, p: &Value) -> Option<String> {
         "what_if" => format!("성적 예측(What-if) 점수 입력 — 제출 #{}: {}", s(p, "submission_id"), s(p, "score")),
         "what_if_reset" => format!("성적 예측 초기화 — {course}"),
         "conversation_read" => format!("메시지 읽음 처리 — #{}", s(p, "conversation_id")),
+        "conversation_reply" => format!("메시지 답장 — 대화 #{}", s(p, "conversation_id")),
         _ => return None,
     })
 }

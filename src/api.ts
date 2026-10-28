@@ -59,7 +59,7 @@ export const api = {
   canvas: <T = any>(tool: string, args: Record<string, unknown> = {}) => invoke<T>("canvas_query", { tool, args }),
   download: (fileId: string) => invoke<string>("canvas_download", { fileId: String(fileId) }),
   pending: (includeDone = false) => invoke<Pending[]>("pending_list", { includeDone }),
-  decide: (id: number, approve: boolean) => invoke<any>("pending_decide", { id, approve }),
+  decide: (id: number, approve: boolean, edits?: Record<string, unknown>) => invoke<any>("pending_decide", { id, approve, edits: edits ?? null }),
   audit: () => invoke<Array<{ at: number; action: string; detail: string; ok: boolean }>>("audit_list"),
   jobs: () => invoke<Job[]>("jobs_list"),
   updateJob: (kind: string, enabled: boolean, intervalMin: number, params: Record<string, unknown>) =>

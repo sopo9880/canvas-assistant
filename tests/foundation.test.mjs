@@ -71,3 +71,23 @@ test("links open through the validated open_external command, not a WebView perm
     assert.ok(!read(f).includes("plugin-opener"), f);
   }
 });
+
+test("AI proposals cannot carry local file paths and user-only actions are not proposable", () => {
+  const mcp = read("src-tauri/src/mcp.rs");
+  assert.ok(mcp.includes('obj.remove("files")'));
+  assert.ok(mcp.includes('"what_if_reset" | "conversation_read"'));
+});
+
+test("the generic Canvas API tool is read-only and path-guarded", () => {
+  const ext = read("src-tauri/src/canvas_ext.rs");
+  assert.ok(ext.includes("pub fn safe_api_path") && ext.includes('p.contains("..")'));
+  const apiGet = ext.slice(ext.indexOf("pub fn api_get"), ext.indexOf("// ---------------- file upload"));
+  assert.ok(apiGet.includes("get_all") && !apiGet.includes("post_form") && !apiGet.includes("put_form"));
+});
+
+test("storage uploads never carry the Canvas token", () => {
+  const ext = read("src-tauri/src/canvas_ext.rs");
+  const upload = ext.slice(ext.indexOf("pub fn upload_file"), ext.indexOf("// ---------------- writes"));
+  const storagePost = upload.slice(upload.indexOf("storage.post"), upload.indexOf(".send(&body"));
+  assert.ok(!storagePost.includes("Authorization"));
+});
