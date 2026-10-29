@@ -55,6 +55,9 @@ test("the installer bundles a pinned Codex and the bridge locks it down", () => 
   assert.match(pkg.codexVersion, /^\d+\.\d+\.\d+$/);
   const res = JSON.parse(read("src-tauri/tauri.conf.json")).bundle.resources;
   assert.equal(res["resources/codex/codex.exe"], "codex/codex.exe");
+  // Code Mode tool calls spawn this helper from codex.exe's folder.
+  assert.equal(res["resources/codex/codex-code-mode-host.exe"], "codex/codex-code-mode-host.exe");
+  assert.ok(read("scripts/fetch-codex.mjs").includes("codex-code-mode-host.exe"));
   const src = read("src-tauri/src/codex.rs");
   for (const flag of ['cli_auth_credentials_store=\\"keyring\\"', "features.shell_tool=false", 'web_search=\\"disabled\\"', '"CODEX_HOME"']) {
     assert.ok(src.includes(flag), flag);

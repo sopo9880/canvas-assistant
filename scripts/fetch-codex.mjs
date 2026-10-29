@@ -1,4 +1,6 @@
-// Downloads the pinned Windows Codex binary that ships inside the installer.
+// Downloads the pinned Windows Codex binaries that ship inside the installer:
+// codex.exe and codex-code-mode-host.exe, which Codex starts from the same folder whenever the
+// model calls tools through Code Mode (without it every model tool call fails).
 // Source: the official npm package @openai/codex@<version>-win32-x64 (npm verifies its integrity).
 // Usage: node scripts/fetch-codex.mjs   (version comes from package.json "codexVersion")
 import { execFileSync } from "node:child_process";
@@ -12,9 +14,9 @@ const version = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf
 if (!/^\d+\.\d+\.\d+$/.test(version ?? "")) throw new Error("package.json codexVersion is missing or invalid");
 
 const outDir = path.join(root, "src-tauri", "resources", "codex");
-const target = path.join(outDir, "codex.exe");
+const FILES = ["codex.exe", "codex-code-mode-host.exe"];
 const stamp = path.join(outDir, "VERSION");
-if (fs.existsSync(target) && fs.existsSync(stamp) && fs.readFileSync(stamp, "utf8").trim() === version) {
+if (FILES.every((f) => fs.existsSync(path.join(outDir, f))) && fs.existsSync(stamp) && fs.readFileSync(stamp, "utf8").trim() === version) {
   console.log(`codex ${version} already present`);
   process.exit(0);
 }
@@ -28,13 +30,16 @@ try {
   });
   const tgz = fs.readdirSync(tmp).find((f) => f.endsWith(".tgz"));
   if (!tgz) throw new Error("npm pack produced no archive");
-  const member = "package/vendor/x86_64-pc-windows-msvc/bin/codex.exe";
-  execFileSync("tar", ["-xzf", path.join(tmp, tgz), "-C", tmp, member], { stdio: "inherit" });
+  const members = FILES.map((f) => `package/vendor/x86_64-pc-windows-msvc/bin/${f}`);
+  execFileSync("tar", ["-xzf", path.join(tmp, tgz), "-C", tmp, ...members], { stdio: "inherit" });
   fs.mkdirSync(outDir, { recursive: true });
-  fs.copyFileSync(path.join(tmp, member), target);
+  for (const [i, f] of FILES.entries()) {
+    const target = path.join(outDir, f);
+    fs.copyFileSync(path.join(tmp, members[i]), target);
+    const sha = createHash("sha256").update(fs.readFileSync(target)).digest("hex");
+    console.log(`codex ${version} → ${path.relative(root, target)} (sha256 ${sha})`);
+  }
   fs.writeFileSync(stamp, version + "\n");
-  const sha = createHash("sha256").update(fs.readFileSync(target)).digest("hex");
-  console.log(`codex ${version} → ${path.relative(root, target)} (sha256 ${sha})`);
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
 }

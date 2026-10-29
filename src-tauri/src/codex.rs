@@ -87,6 +87,13 @@ pub fn bundled_codex(app: &AppHandle) -> Option<PathBuf> {
     app.path().resource_dir().ok().map(|d| d.join("codex").join(exe)).filter(|p| p.is_file())
 }
 
+/// Codex runs model tool calls in Code Mode through this helper, which it expects next to the
+/// codex executable. Missing helper = every tool call the model makes fails.
+pub fn code_mode_host_beside(program: &std::path::Path) -> bool {
+    let name = if cfg!(windows) { "codex-code-mode-host.exe" } else { "codex-code-mode-host" };
+    program.parent().is_some_and(|d| d.join(name).is_file())
+}
+
 /// Resolution order: a path the user set explicitly, the bundled binary, then PATH / npm installs.
 pub fn locate_codex(custom: Option<&str>, bundled: Option<PathBuf>) -> Result<(PathBuf, Vec<String>, CodexSource), String> {
     if let Some(path) = custom.map(str::trim).filter(|p| !p.is_empty()) {
@@ -190,9 +197,8 @@ fn developer_instructions() -> String {
          - 날짜는 사용자의 현지 시간으로 바꾸고, 마감까지 남은 시간도 함께 알려주세요.\n\
          - 과제 분석을 요청받으면: canvas_planner나 canvas_upcoming으로 대상을 찾고, 과제마다 canvas_get_assignment(설명·루브릭·허용 형식·제출 횟수), canvas_assignment_groups(배점 비중), 관련 강의자료(canvas_read_file / canvas_learningx_read), 필요하면 canvas_read_submission(이전 제출)과 canvas_syllabus를 확인하세요. 마감 순서로 표를 만들고, 과제별로 해야 할 일, 채점 기준, 제출 방식, 성적 비중을 정리하세요.\n\
          - 사용자가 메시지에 [첨부된 Canvas 항목]이나 [도구 결과]를 붙이면 그 ID와 데이터를 우선 사용하세요.\n\
-         - propose_ 로 시작하는 도구는 Canvas를 바로 바꾸지 않고 '승인 대기' 목록에 요청을 올립니다. 제안한 뒤에는 앱에서 승인해야 실행된다고 반드시 안내하세요. 제출은 사용자가 만든 결과물(파일, 링크, 사용자가 쓴 글)로 propose_submit_files / propose_submit_url / propose_submit_text를 쓰고, 파일은 사용자가 승인 카드에서 직접 첨부합니다.\n\
-         - 이 환경은 읽기 전용이라 셸 명령이나 PC 파일 수정은 할 수 없습니다 (Canvas 도구는 쓸 수 있습니다).\n\
-         - 과제 답안을 대신 작성해 제출하는 등 학업 윤리에 어긋나는 요청은 정중히 거절하고, 이해를 돕는 방식으로 도와주세요.",
+         - propose_ 로 시작하는 도구는 Canvas를 바로 바꾸지 않고 '승인 대기' 목록에 요청을 올립니다. 제안한 뒤에는 앱에서 승인해야 실행된다고 반드시 안내하세요. 제출은 propose_submit_files / propose_submit_url / propose_submit_text를 쓰고, 파일은 사용자가 승인 카드에서 직접 첨부합니다.\n\
+         - 이 환경은 읽기 전용이라 셸 명령이나 PC 파일 수정은 할 수 없습니다 (Canvas 도구는 쓸 수 있습니다).",
         now.format("%Y-%m-%d %H:%M (%A)"),
         now.format("UTC%:z"),
     )
@@ -534,6 +540,7 @@ impl CodexState {
                 "tools": tools,
             },
             "profileCall": call,
+            "codeModeHost": locate_codex(config::load(&data_dir).codex_path.as_deref(), bundled_codex(app)).map(|(p, _, _)| code_mode_host_beside(&p)).unwrap_or(false),
             "helper": std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(),
         }))
     }
@@ -604,6 +611,18 @@ pub fn path_display(p: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn finds_code_mode_host_next_to_codex() {
+        let dir = std::env::temp_dir().join(format!("ca-host-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join(if cfg!(windows) { "codex.exe" } else { "codex" });
+        std::fs::write(&exe, b"x").unwrap();
+        assert!(!code_mode_host_beside(&exe));
+        std::fs::write(dir.join(if cfg!(windows) { "codex-code-mode-host.exe" } else { "codex-code-mode-host" }), b"x").unwrap();
+        assert!(code_mode_host_beside(&exe));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     use super::*;
 
     #[test]

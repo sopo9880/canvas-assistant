@@ -54,7 +54,8 @@
     "shortDescription": "Canvas LMS 학습 비서",
     "longDescription": "Canvas LMS와 Codex를 연결한 Windows 개인 학습 비서",
     "resources": {
-      "resources/codex/codex.exe": "codex/codex.exe"
+      "resources/codex/codex.exe": "codex/codex.exe",
+      "resources/codex/codex-code-mode-host.exe": "codex/codex-code-mode-host.exe"
     }
   }
 }

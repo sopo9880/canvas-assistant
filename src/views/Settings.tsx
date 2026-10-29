@@ -134,6 +134,7 @@ export default function SettingsView() {
               <span>Canvas 연결</span><span>{diag.canvasConfigured ? "✓ 설정됨" : "✗ 설정 안 됨 — 위에서 Canvas 주소와 토큰을 입력하세요"}</span>
               <span>대화에서 사용</span><span>{diag.canvasToolsInChat ? "✓ 켜짐" : "✗ 꺼짐"}</span>
               <span>도구 서버</span><span>{diag.server?.status === "connected" ? `✓ 연결됨 (도구 ${diag.server.tools}개)` : `✗ ${diag.server?.status ?? "응답 없음"}${diag.server?.error ? ` — ${typeof diag.server.error === "string" ? diag.server.error : JSON.stringify(diag.server.error)}` : ""}`}</span>
+              <span>AI 도구 실행기</span><span>{diag.codeModeHost ? "✓ codex-code-mode-host 있음" : "✗ codex-code-mode-host가 Codex 옆에 없습니다 — 설치 파일을 다시 설치하세요 (AI가 부르는 도구가 모두 실패함)"}</span>
               <span>시험 호출</span><span className="break">{diag.profileCall ? (diag.profileCall.isError ? `✗ ${diag.profileCall.text}` : "✓ Canvas 프로필 조회 성공") : "—"}</span>
             </div>
           ))}
