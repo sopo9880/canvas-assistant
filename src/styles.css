@@ -338,3 +338,7 @@ button.icon.danger:hover:not(:disabled) { color: var(--coral); }
 .submission-content { display: flex; flex-direction: column; gap: 8px; margin: 8px 0; }
 .submission-content details summary { cursor: pointer; padding: 4px 0; }
 .stack { display: flex; flex-direction: column; gap: 8px; }
+
+.file-card { align-self: flex-start; display: flex; align-items: center; gap: 12px; max-width: min(560px, 100%); background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
+.file-card .file-icon { font-size: 26px; }
+.file-card .title { font-weight: 600; overflow-wrap: anywhere; }

@@ -5,6 +5,7 @@ pub mod codex;
 pub mod config;
 pub mod db;
 pub mod extract;
+pub mod generate;
 pub mod learningx;
 pub mod materials;
 pub mod mcp;
@@ -58,6 +59,7 @@ async fn app_info(state: Shared<'_>) -> Result<Value, String> {
         let settings = config::load(&s.data_dir);
         Ok(json!({
             "version": env!("CARGO_PKG_VERSION"),
+            "platform": std::env::consts::OS,
             "dataDir": s.data_dir.to_string_lossy(),
             "hasToken": config::get_token().is_some(),
             "settings": settings,
@@ -83,8 +85,9 @@ async fn settings_save(state: Shared<'_>, patch: Value) -> Result<config::Settin
         if let Some(v) = patch.get("codexPath") {
             settings.codex_path = v.as_str().map(str::trim).filter(|p| !p.is_empty()).map(str::to_string);
             if let Some(p) = &settings.codex_path {
-                if !p.to_ascii_lowercase().ends_with(".exe") || !std::path::Path::new(p).is_file() {
-                    return Err("codex.exe 파일의 전체 경로를 입력하세요.".into());
+                let exe_ok = !cfg!(windows) || p.to_ascii_lowercase().ends_with(".exe");
+                if !exe_ok || !std::path::Path::new(p).is_file() {
+                    return Err(if cfg!(windows) { "codex.exe 파일의 전체 경로를 입력하세요." } else { "codex 실행 파일의 전체 경로를 입력하세요." }.into());
                 }
             }
         }
@@ -437,6 +440,30 @@ fn open_external(app: AppHandle, url: String) -> Result<(), String> {
     app.opener().open_url(parsed.as_str(), None::<&str>).map_err(|e| format!("브라우저를 열 수 없습니다: {e}"))
 }
 
+/// Opens (or shows in its folder) a file the AI made. Only files inside the AI output folder
+/// qualify, and scripts/code are only revealed, never opened, so nothing the AI wrote runs.
+#[tauri::command]
+fn open_generated(app: AppHandle, path: String, reveal: bool) -> Result<(), String> {
+    let dir = codex::generated_dir(&app)?;
+    let p = std::path::PathBuf::from(path.trim());
+    if !generate::is_inside(&dir, &p) || !p.is_file() {
+        return Err("AI가 만든 파일 폴더 밖의 파일은 열 수 없습니다 (파일이 옮겨졌거나 지워졌을 수 있음)".into());
+    }
+    let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if reveal || !generate::safe_to_open(name) {
+        return app.opener().reveal_item_in_dir(&p).map_err(|e| format!("폴더를 열 수 없습니다: {e}"));
+    }
+    app.opener().open_path(p.to_string_lossy(), None::<&str>).map_err(|e| format!("파일을 열 수 없습니다: {e}"))
+}
+
+#[tauri::command]
+fn open_generated_folder(app: AppHandle) -> Result<String, String> {
+    let dir = codex::generated_dir(&app)?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    app.opener().open_path(dir.to_string_lossy(), None::<&str>).map_err(|e| format!("폴더를 열 수 없습니다: {e}"))?;
+    Ok(dir.to_string_lossy().into_owned())
+}
+
 /// Checks that Codex can start the Canvas tools and call one, for troubleshooting.
 #[tauri::command]
 async fn codex_diagnose(app: AppHandle, state: Shared<'_>) -> Result<Value, String> {
@@ -565,14 +592,16 @@ pub fn run() {
             learningx_download,
             pending_list, pending_decide, canvas_action, pick_files, audit_list,
             jobs_list, jobs_update, jobs_run_now, briefings_list,
-            codex_start, codex_call, codex_locate, codex_diagnose, open_external
+            codex_start, codex_call, codex_locate, codex_diagnose, open_external, open_generated, open_generated_folder
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Canvas Assistant")
-        .run(|app, event| {
-            if let tauri::RunEvent::Exit = event {
-                app.state::<Arc<AppState>>().codex.stop();
-            }
+        .run(|app, event| match event {
+            tauri::RunEvent::Exit => app.state::<Arc<AppState>>().codex.stop(),
+            // macOS: clicking the Dock icon brings back a window hidden by "close to tray".
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { has_visible_windows: false, .. } => show_main(app),
+            _ => {}
         });
 }
 

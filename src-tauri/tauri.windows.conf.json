@@ -1,0 +1,11 @@
+{
+  "bundle": {
+    "targets": [
+      "nsis"
+    ],
+    "resources": {
+      "resources/codex/codex.exe": "codex/codex.exe",
+      "resources/codex/codex-code-mode-host.exe": "codex/codex-code-mode-host.exe"
+    }
+  }
+}

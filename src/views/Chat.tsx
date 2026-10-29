@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import { api, errorText, Model } from "../api";
 import { useApp } from "../App";
 import { Banner, Markdown, Spinner } from "../components";
@@ -8,12 +9,14 @@ import CodexLogin from "../CodexLogin";
 import ToolPicker from "../ToolPicker";
 import { composeMessage, splitMessage } from "../toolkit";
 import { describeRef, kindLabel } from "../shared";
-import { effortLabels, toolLabels } from "../util";
+import { bytes, effortLabels, toolLabels } from "../util";
 
 type Entry =
   | { kind: "user"; id: string; text: string }
   | { kind: "assistant"; id: string; text: string; done: boolean }
-  | { kind: "tool"; id: string; tool: string; server: string; status: "running" | "done" | "error"; detail?: string };
+  | { kind: "tool"; id: string; tool: string; server: string; status: "running" | "done" | "error"; detail?: string; file?: MadeFile };
+
+type MadeFile = { name: string; path: string; size?: number };
 
 type Thread = { id: string; name?: string | null; preview?: string; updatedAt?: number };
 
@@ -35,6 +38,7 @@ function itemToEntry(item: any): Entry | null {
         kind: "tool", id: item.id, tool: item.tool, server: item.server,
         status: item.status === "failed" || item.error ? "error" : item.status === "inProgress" ? "running" : "done",
         detail: toolDetail(item),
+        file: item.tool === "make_file" ? madeFile(item) : undefined,
       };
     default:
       return null;
@@ -47,6 +51,48 @@ function toolDetail(item: any): string | undefined {
   if (item?.status !== "failed") return undefined;
   const text = (item?.result?.content ?? []).map((c: any) => c?.text ?? "").join("\n").trim();
   return text ? text.slice(0, 600) : undefined;
+}
+
+/** The saved file reported by the make_file tool. */
+function madeFile(item: any): MadeFile | undefined {
+  if (item?.status === "failed") return undefined;
+  for (const c of item?.result?.content ?? []) {
+    try {
+      const v = JSON.parse(c?.text ?? "");
+      if (v?.saved && v.path) return { name: String(v.name ?? ""), path: String(v.path), size: Number(v.size) || undefined };
+    } catch { /* not JSON */ }
+  }
+  return undefined;
+}
+
+function FileCard({ file }: { file: MadeFile }) {
+  const [msg, setMsg] = useState("");
+  const run = async (reveal: boolean) => {
+    setMsg("");
+    try { await invoke("open_generated", { path: file.path, reveal }); } catch (e) { setMsg(errorText(e)); }
+  };
+  return (
+    <div className="file-card">
+      <span className="file-icon" aria-hidden>{fileIcon(file.name)}</span>
+      <div className="grow">
+        <div className="title">{file.name}</div>
+        <div className="muted small">{file.size != null ? `${bytes(file.size)} · ` : ""}다운로드 › Canvas Assistant › AI 생성</div>
+        {msg && <div className="error-text small">{msg}</div>}
+      </div>
+      <button onClick={() => void run(false)}>열기</button>
+      <button onClick={() => void run(true)}>폴더에서 보기</button>
+    </div>
+  );
+}
+
+function fileIcon(name: string) {
+  const ext = name.split(".").pop()?.toLowerCase() ?? "";
+  if (ext === "pdf") return "📕";
+  if (ext === "docx") return "📘";
+  if (ext === "zip") return "🗜";
+  if (["csv", "tsv"].includes(ext)) return "📊";
+  if (["md", "txt"].includes(ext)) return "📝";
+  return "📄";
 }
 
 export default function Chat({ prefill }: { prefill: { text: string; n: number; send?: boolean } | null }) {
@@ -369,6 +415,7 @@ export default function Chat({ prefill }: { prefill: { text: string; n: number; 
               {!e.done && <span className="cursor" aria-hidden />}
             </div>
           ) : (
+            e.file ? <FileCard key={e.id} file={e.file} /> :
             <div key={e.id} className={"tool-chip " + e.status}>
               {e.status === "running" ? <span className="spinner" aria-hidden /> : <span aria-hidden>{e.status === "error" ? "⚠" : "✓"}</span>}
               {e.server === "canvas" ? "Canvas · " : `${e.server} · `}{toolLabels[e.tool] ?? e.tool}

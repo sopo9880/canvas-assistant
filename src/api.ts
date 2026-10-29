@@ -12,6 +12,8 @@ export type Settings = {
 
 export type AppInfo = {
   version: string;
+  /** Rust std::env::consts::OS: "windows", "macos", … */
+  platform?: string;
   dataDir: string;
   hasToken: boolean;
   settings: Settings;

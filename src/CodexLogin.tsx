@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useApp } from "./App";
 import { Banner, open, Spinner } from "./components";
+import { osText } from "./util";
 
 function CopyLink({ url }: { url?: string }) {
   const [copied, setCopied] = useState(false);
@@ -18,7 +19,7 @@ function CopyLink({ url }: { url?: string }) {
 
 /** ChatGPT sign-in for the bundled Codex. Used on the chat screen and in Settings. */
 export default function CodexLogin({ compact = false }: { compact?: boolean }) {
-  const { codex, login, loginError, startLogin, cancelLogin, connectCodex, refreshAccount } = useApp();
+  const { codex, login, loginError, startLogin, cancelLogin, connectCodex, refreshAccount, info } = useApp();
   const [copied, setCopied] = useState(false);
 
   if (codex.state === "starting") return <Spinner label="Codex 준비 중…" />;
@@ -37,7 +38,7 @@ export default function CodexLogin({ compact = false }: { compact?: boolean }) {
       {!compact && (
         <p className="muted">
           ChatGPT 계정으로 로그인하면 AI 대화와 브리핑을 쓸 수 있습니다. 로그인은 OpenAI 공식 페이지에서 진행되고,
-          로그인 정보는 Windows 자격 증명 관리자에 저장됩니다. 이 앱은 비밀번호를 받지 않습니다.
+          로그인 정보는 {osText(info?.platform).vault}에 저장됩니다. 이 앱은 비밀번호를 받지 않습니다.
         </p>
       )}
       {loginError && <Banner>{loginError}</Banner>}

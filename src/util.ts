@@ -88,6 +88,7 @@ export const toolLabels: Record<string, string> = {
   canvas_folder_files: "폴더 파일 조회",
   canvas_api_get: "Canvas API 조회",
   canvas_read_file: "파일 내용 읽기",
+  make_file: "파일 만들기",
   canvas_read_submission: "내 제출물 읽기",
   canvas_learningx_resources: "LearningX 강의자료 목록",
   canvas_learningx_read: "LearningX 자료 읽기",
@@ -104,3 +105,18 @@ export const toolLabels: Record<string, string> = {
 export const effortLabels: Record<string, string> = {
   none: "없음", minimal: "최소", low: "낮음", medium: "보통", high: "높음", xhigh: "매우 높음", max: "최대", ultra: "울트라",
 };
+
+/** Words that differ between Windows and macOS builds. */
+export function osText(platform?: string) {
+  const mac = platform === "macos";
+  return {
+    mac,
+    name: mac ? "macOS" : "Windows",
+    vault: mac ? "macOS 키체인" : "Windows 자격 증명 관리자",
+    autostart: mac ? "로그인 시 자동 실행" : "Windows 시작 시 자동 실행",
+    tray: mac ? "메뉴 막대" : "트레이",
+    notifications: mac ? "macOS 알림" : "Windows 알림",
+    codexFile: mac ? "codex" : "codex.exe",
+    codexPlaceholder: mac ? "/Applications/…/codex" : "C:\\...\\codex.exe",
+  };
+}

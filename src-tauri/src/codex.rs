@@ -193,25 +193,38 @@ fn developer_instructions() -> String {
          - 사용자가 '내가 냈던 코드/보고서'를 물으면 canvas_read_submission(course_id, assignment_id)으로 실제 제출 파일 내용을 읽으세요. 예전 시도는 attempt로 고릅니다. 과제를 모르면 canvas_list_submissions로 제출한 과제를 찾으세요.\n\
          - 긴 파일은 next_offset이 오면 필요한 만큼 이어서 읽으세요.\n\
          \n\
+         [파일 만들기]\n\
+         - 사용자가 PDF·Word·ZIP·코드·CSV 같은 파일을 원하거나, 정리한 내용이 길어 파일로 주는 게 나으면 make_file 도구로 만드세요. PDF/DOCX는 Markdown(#, 목록, ``` 코드, | 표 |)으로 내용을 쓰고, ZIP은 files 목록으로 여러 파일을 넣습니다.\n\
+         - 만든 뒤에는 대화에 '열기'·'폴더에서 보기' 버튼이 나오므로, 파일 이름과 들어 있는 내용만 짧게 알려주세요. 파일 내용 전체를 대화에 다시 붙여넣지 마세요.\n\
+         \n\
          [답변]\n\
          - 날짜는 사용자의 현지 시간으로 바꾸고, 마감까지 남은 시간도 함께 알려주세요.\n\
          - 과제 분석을 요청받으면: canvas_planner나 canvas_upcoming으로 대상을 찾고, 과제마다 canvas_get_assignment(설명·루브릭·허용 형식·제출 횟수), canvas_assignment_groups(배점 비중), 관련 강의자료(canvas_read_file / canvas_learningx_read), 필요하면 canvas_read_submission(이전 제출)과 canvas_syllabus를 확인하세요. 마감 순서로 표를 만들고, 과제별로 해야 할 일, 채점 기준, 제출 방식, 성적 비중을 정리하세요.\n\
          - 사용자가 메시지에 [첨부된 Canvas 항목]이나 [도구 결과]를 붙이면 그 ID와 데이터를 우선 사용하세요.\n\
          - propose_ 로 시작하는 도구는 Canvas를 바로 바꾸지 않고 '승인 대기' 목록에 요청을 올립니다. 제안한 뒤에는 앱에서 승인해야 실행된다고 반드시 안내하세요. 제출은 propose_submit_files / propose_submit_url / propose_submit_text를 쓰고, 파일은 사용자가 승인 카드에서 직접 첨부합니다.\n\
-         - 이 환경은 읽기 전용이라 셸 명령이나 PC 파일 수정은 할 수 없습니다 (Canvas 도구는 쓸 수 있습니다).",
+         - 이 환경은 읽기 전용이라 셸 명령이나 PC 파일 수정은 할 수 없습니다. Canvas 도구와 make_file(새 파일 만들기)은 쓸 수 있습니다.",
         now.format("%Y-%m-%d %H:%M (%A)"),
         now.format("UTC%:z"),
     )
+}
+
+/// Folder for files the AI makes (make_file): Downloads/Canvas Assistant/AI 생성.
+pub fn generated_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    match app.path().download_dir() {
+        Ok(d) => Ok(d.join("Canvas Assistant").join(crate::generate::FOLDER)),
+        Err(_) => Ok(app.path().app_data_dir().map_err(|e| e.to_string())?.join(crate::generate::FOLDER)),
+    }
 }
 
 /// Config overrides that register this executable as the `canvas` MCP server.
 fn canvas_mcp_config(app: &AppHandle) -> Result<Value, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let out = generated_dir(app)?;
     Ok(json!({
         "mcp_servers.canvas": {
             "command": exe.to_string_lossy(),
-            "args": ["--mcp-canvas", "--data-dir", data.to_string_lossy()],
+            "args": ["--mcp-canvas", "--data-dir", data.to_string_lossy(), "--output-dir", out.to_string_lossy()],
             "startup_timeout_sec": 20,
             "tool_timeout_sec": 240,
             // Proposals only queue a request; real Canvas changes need in-app approval.

@@ -62,6 +62,8 @@ mockIPC((cmd, args: any) => {
       if (m === "thread/resume") return {};
       if (m === "account/login/start") return args.params.type === "chatgpt" ? { type: "chatgpt", loginId: "l1", authUrl: "https://auth.openai.com/x" } : { type: "chatgptDeviceCode", loginId: "l2", userCode: "ABCD-1234", verificationUrl: "https://auth.openai.com/codex/device" };
       if (m === "thread/turns/list") return { data: [{ items: [
+        { type: "agentMessage", id: "i6", text: "**이번_주_과제_정리.pdf**를 만들었습니다. 마감 순서표와 과제별 할 일이 들어 있어요." },
+        { type: "mcpToolCall", id: "i5", server: "canvas", tool: "make_file", status: "completed", result: { content: [{ type: "text", text: JSON.stringify({ saved: true, name: "이번_주_과제_정리.pdf", path: "C:\\Users\\sopo\\Downloads\\Canvas Assistant\\AI 생성\\이번_주_과제_정리.pdf", size: 48213 }) }] } },
         { type: "agentMessage", id: "i4", text: answer },
         { type: "mcpToolCall", id: "i3b", server: "canvas", tool: "propose_planner_note", status: "completed" },
         { type: "mcpToolCall", id: "i3", server: "canvas", tool: "canvas_upcoming", status: "completed" },

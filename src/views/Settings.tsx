@@ -1,13 +1,16 @@
 import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { api, errorText } from "../api";
 import { useApp } from "../App";
 import { Banner, open, Spinner, Toggle } from "../components";
 import CodexLogin from "../CodexLogin";
+import { osText } from "../util";
 
 export default function SettingsView() {
   const { info, refreshInfo, codex, connectCodex, refreshAccount } = useApp();
   const s = info?.settings;
+  const os = osText(info?.platform);
   const [baseUrl, setBaseUrl] = useState(s?.canvasBaseUrl ?? "");
   const [token, setToken] = useState("");
   const [connecting, setConnecting] = useState(false);
@@ -81,7 +84,7 @@ export default function SettingsView() {
 
         <section className="card">
           <h2>📚 Canvas 연결</h2>
-          <p className="muted">학교 Canvas 주소와 액세스 토큰을 입력하세요. 토큰은 Windows 자격 증명 관리자에만 저장되고 화면이나 파일에 남지 않습니다.</p>
+          <p className="muted">학교 Canvas 주소와 액세스 토큰을 입력하세요. 토큰은 {os.vault}에만 저장되고 화면이나 파일에 남지 않습니다.</p>
           <form className="form-grid" onSubmit={(e) => { e.preventDefault(); void connect(); }}>
             <label className="span-2">Canvas 주소
               <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="예: canvas.학교.ac.kr" autoComplete="url" spellCheck={false} />
@@ -146,8 +149,8 @@ export default function SettingsView() {
               <span className="break">{located ? (located.found ? `${located.source === "bundled" ? "앱에 포함된 Codex" : located.source === "custom" ? "직접 지정한 경로" : "PC에 설치된 Codex"} — ${located.path}` : <span className="error-text">{located.error}</span>) : "확인 중…"}</span>
             </div>
             <form className="form-grid" onSubmit={(e) => { e.preventDefault(); void saveCodexPath(); }}>
-              <label className="span-2">다른 codex.exe 사용 (비워 두면 앱에 포함된 Codex 사용)
-                <input value={codexPath} onChange={(e) => setCodexPath(e.target.value)} placeholder="C:\...\codex.exe" spellCheck={false} />
+              <label className="span-2">다른 {os.codexFile} 사용 (비워 두면 앱에 포함된 Codex 사용)
+                <input value={codexPath} onChange={(e) => setCodexPath(e.target.value)} placeholder={os.codexPlaceholder} spellCheck={false} />
               </label>
               <div className="span-2 row end"><button type="submit">저장</button></div>
             </form>
@@ -155,12 +158,12 @@ export default function SettingsView() {
         </section>
 
         <section className="card">
-          <h2>🪟 Windows</h2>
-          <Toggle label="Windows 시작 시 자동 실행" hint="트레이에 조용히 시작해 알림과 자동화를 계속 실행합니다."
+          <h2>{os.mac ? "🍎" : "🪟"} {os.name}</h2>
+          <Toggle label={os.autostart} hint={`${os.tray}에 조용히 시작해 알림과 자동화를 계속 실행합니다.`}
             checked={!!autostart} disabled={autostart === null} onChange={(v) => void toggleAutostart(v)} />
-          <Toggle label="창을 닫으면 트레이로 숨기기" hint="끄면 창을 닫을 때 앱이 완전히 종료됩니다."
+          <Toggle label={`창을 닫으면 ${os.tray}로 숨기기`} hint={os.mac ? "Dock 아이콘을 누르면 창이 다시 열립니다. 끄면 창을 닫을 때 앱이 종료됩니다." : "끄면 창을 닫을 때 앱이 완전히 종료됩니다."}
             checked={s?.closeToTray ?? true} onChange={(v) => void setPref({ closeToTray: v })} />
-          <Toggle label="Windows 알림" hint="마감·공지·성적·승인 요청 알림"
+          <Toggle label={os.notifications} hint="마감·공지·성적·승인 요청 알림"
             checked={s?.notifications ?? true} onChange={(v) => void setPref({ notifications: v })} />
         </section>
 
@@ -176,6 +179,7 @@ export default function SettingsView() {
               try { setUpdate(await api.checkUpdate()); } catch (e) { setUpdate({ error: errorText(e) }); }
             }}>업데이트 확인</button>
             <button onClick={() => open("https://github.com/sopo9880/canvas-assistant/releases")}>릴리스 페이지</button>
+            <button onClick={() => void invoke("open_generated_folder").catch(() => undefined)}>AI가 만든 파일 폴더</button>
           </div>
           {update && (update.loading ? <Spinner label="확인 중…" /> : update.error ? <Banner>{update.error}</Banner> : !update.available ? (
             <Banner tone="info">자동 확인을 할 수 없습니다 (비공개 저장소). 릴리스 페이지에서 직접 확인하세요.</Banner>

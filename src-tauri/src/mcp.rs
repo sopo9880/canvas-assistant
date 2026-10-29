@@ -90,6 +90,16 @@ pub fn tool_list() -> Vec<Value> {
         read("canvas_read_submission", "Read what the user actually submitted for an assignment: text body, URL and the CONTENT of every submitted file (code, reports, ZIP projects). attempt picks an earlier attempt; file_id + offset continue one long file.", json!({"course_id": c(), "assignment_id": id_prop("Assignment id"), "attempt": {"type": "integer", "minimum": 1}, "file_id": id_prop("One attachment id"), "offset": {"type": "integer", "minimum": 0}}), &["course_id", "assignment_id"]),
         read("canvas_learningx_resources", "List lecture materials in the course's LearningX '강의자료실' (an external LTI tool many Korean schools use instead of Canvas Files). Returns title, week/section, type and content_id. Use this when canvas_list_files is empty or refused.", json!({"course_id": c()}), &["course_id"]),
         read("canvas_learningx_read", "Read the TEXT CONTENT of one LearningX material (PDF, PPT, documents, code) by content_id from canvas_learningx_resources. Videos cannot be read. Long files are paged with offset.", json!({"course_id": c(), "content_id": {"type": "string"}, "offset": {"type": "integer", "minimum": 0}}), &["course_id", "content_id"]),
+        json!({"name": "make_file", "description": "Create a file for the user and save it to their Downloads/Canvas Assistant/AI 생성 folder; the chat then shows Open / Show in folder buttons. \
+Use this whenever the user asks for a file (report, summary, notes, code, data) instead of pasting long content. Formats by the extension of name: .pdf and .docx are rendered from Markdown in content (headings #, lists, ``` code blocks, | tables |), \
+.md/.txt/.csv/.json/.html and source code (.py .c .cpp .java …) are saved as-is, .zip is built from files[] (each {path, content}; nested .pdf/.docx entries are rendered too). Executables are refused. Never overwrites existing files.",
+            "inputSchema": schema(json!({
+                "name": {"type": "string", "description": "File name with extension, e.g. 열전달_HW6_정리.pdf"},
+                "content": {"type": "string", "description": "Text or Markdown content (not for .zip)"},
+                "title": {"type": "string", "description": "PDF document title (optional)"},
+                "files": {"type": "array", "description": "Only for .zip", "items": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"], "additionalProperties": false}}
+            }), &["name"]),
+            "annotations": {"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false}}),
         read("canvas_api_get", "Read-only GET of any Canvas REST API path the student can access, for data the other tools do not cover. path is relative to /api/v1, e.g. 'courses/123/pages' or 'users/self/activity_stream'. query is an object of query parameters (arrays allowed).", json!({"path": {"type": "string"}, "query": {"type": "object"}}), &["path"]),
         prop("propose_submit_files", "Propose submitting files to an assignment (online_upload). You cannot attach files yourself: the user picks their own files in the approval card. Use this when the user wants to hand in a file they made.", json!({"course_id": c(), "assignment_id": id_prop("Assignment id"), "comment": {"type": "string"}, "reason": reason.clone()}), &["course_id", "assignment_id", "reason"]),
         prop("propose_submission_comment", "Propose adding a comment to the user's submission (e.g. a note to the instructor).", json!({"course_id": c(), "assignment_id": id_prop("Assignment id"), "text": {"type": "string"}, "reason": reason.clone()}), &["course_id", "assignment_id", "text", "reason"]),
@@ -240,6 +250,13 @@ pub fn read_tool(client: &canvas::Client, name: &str, args: &Value) -> Result<Va
 /// Runs one tool. Returns (text, is_error).
 pub fn call_tool(data_dir: &Path, name: &str, args: &Value) -> (String, bool) {
     let result: Result<Value, String> = (|| {
+        if name == "make_file" {
+            let out = crate::generate::make_file(&output_dir(data_dir), args)?;
+            if let Ok(db) = Db::open(data_dir) {
+                db.audit("make_file", out["name"].as_str().unwrap_or(""), true);
+            }
+            return Ok(out);
+        }
         if let Some(kind) = name.strip_prefix("propose_") {
             if !canvas::WRITE_KINDS.contains(&kind) || matches!(kind, "what_if_reset" | "conversation_read" | "module_item_read" | "conversation_reply") {
                 return Err(format!("unknown tool {name}"));
@@ -314,12 +331,26 @@ pub fn handle(data_dir: &Path, msg: &Value) -> Option<Value> {
     })
 }
 
+/// Where make_file saves (Downloads/Canvas Assistant/AI 생성), passed by the app as --output-dir.
+static OUTPUT_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+fn output_dir(data_dir: &Path) -> PathBuf {
+    OUTPUT_DIR.get().cloned().unwrap_or_else(|| data_dir.join(crate::generate::FOLDER))
+}
+
+pub fn output_dir_from_args(args: &[String]) -> Option<PathBuf> {
+    args.iter().position(|a| a == "--output-dir").and_then(|i| args.get(i + 1)).map(PathBuf::from)
+}
+
 pub fn data_dir_from_args(args: &[String]) -> Option<PathBuf> {
     args.iter().position(|a| a == "--data-dir").and_then(|i| args.get(i + 1)).map(PathBuf::from)
 }
 
 /// Entry point for `--mcp-canvas`.
 pub fn run_stdio(data_dir: PathBuf) {
+    if let Some(out) = output_dir_from_args(&std::env::args().collect::<Vec<_>>()) {
+        let _ = OUTPUT_DIR.set(out);
+    }
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     for line in stdin.lock().lines() {
@@ -365,7 +396,7 @@ mod tests {
         for t in tools {
             let name = t["name"].as_str().unwrap();
             let read_only = t["annotations"]["readOnlyHint"].as_bool().unwrap();
-            assert_eq!(read_only, !name.starts_with("propose_"), "{name}");
+            assert_eq!(read_only, !name.starts_with("propose_") && name != "make_file", "{name}");
         }
         assert!(handle(&d, &json!({"jsonrpc": "2.0", "method": "notifications/initialized"})).is_none());
         let _ = std::fs::remove_dir_all(d);

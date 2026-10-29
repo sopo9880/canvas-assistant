@@ -3,10 +3,10 @@ import { listen } from "@tauri-apps/api/event";
 import { api, errorText, Job } from "../api";
 import { useApp } from "../App";
 import { Banner, Empty, Markdown, Spinner, Toggle } from "../components";
-import { formatUnix } from "../util";
+import { formatUnix, osText } from "../util";
 
 const meta: Record<Job["kind"], { title: string; desc: string; icon: string }> = {
-  deadline_alert: { title: "마감 알림", desc: "제출하지 않은 과제의 마감이 가까워지면 Windows 알림을 보냅니다.", icon: "⏰" },
+  deadline_alert: { title: "마감 알림", desc: "제출하지 않은 과제의 마감이 가까워지면 알림을 보냅니다.", icon: "⏰" },
   new_announcements: { title: "새 공지 알림", desc: "수강 중인 강의에 새 공지가 올라오면 알려줍니다.", icon: "📢" },
   grade_updates: { title: "성적 등록 알림", desc: "과제 점수가 새로 매겨지면 알려줍니다.", icon: "📝" },
   ai_briefing: { title: "AI 데일리 브리핑", desc: "매일 정한 시각에 Codex가 Canvas를 확인해 오늘 할 일을 정리합니다. ChatGPT 사용량이 소모됩니다.", icon: "☀️" },
@@ -106,8 +106,8 @@ export default function Automation() {
     <div className="page">
       <header className="topbar"><h1>자동화</h1></header>
       <div className="content narrow">
-        <p className="muted">앱이 열려 있거나 트레이에서 실행 중일 때 동작합니다. 설정에서 'Windows 시작 시 자동 실행'을 켜면 항상 알림을 받을 수 있습니다.</p>
-        {info && !info.settings.notifications && <Banner tone="info">Windows 알림이 꺼져 있습니다. 설정에서 켜야 알림이 표시됩니다.</Banner>}
+        <p className="muted">앱이 열려 있거나 {osText(info?.platform).tray}에서 실행 중일 때 동작합니다. 설정에서 '{osText(info?.platform).autostart}'을 켜면 항상 알림을 받을 수 있습니다.</p>
+        {info && !info.settings.notifications && <Banner tone="info">{osText(info?.platform).notifications}이 꺼져 있습니다. 설정에서 켜야 알림이 표시됩니다.</Banner>}
         {error && <Banner onClose={() => setError("")}>{error}</Banner>}
         {jobs === null ? <Spinner label="불러오는 중…" /> : jobs.map((j) => <JobCard key={`${j.kind}-${j.lastRun}`} job={j} onSaved={() => void load()} canvasReady={canvasReady} />)}
         <section className="card">

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Canvas Assistant",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "identifier": "com.sopo9880.canvasassistant",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -27,13 +27,11 @@
   },
   "bundle": {
     "active": true,
-    "targets": [
-      "nsis"
-    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
+      "icons/icon.icns",
       "icons/icon.ico"
     ],
     "windows": {
@@ -52,10 +50,6 @@
     },
     "publisher": "sopo9880",
     "shortDescription": "Canvas LMS 학습 비서",
-    "longDescription": "Canvas LMS와 Codex를 연결한 Windows 개인 학습 비서",
-    "resources": {
-      "resources/codex/codex.exe": "codex/codex.exe",
-      "resources/codex/codex-code-mode-host.exe": "codex/codex-code-mode-host.exe"
-    }
+    "longDescription": "Canvas LMS와 Codex를 연결한 개인 학습 비서 (Windows·macOS)"
   }
 }
