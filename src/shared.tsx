@@ -59,6 +59,15 @@ export function canvasAction<T = any>(kind: string, params: Record<string, unkno
 }
 
 export type PickedFile = { path: string; name: string; size: number };
-export function pickFiles(extensions?: string[] | null) {
-  return invoke<PickedFile[]>("pick_files", { extensions: extensions ?? null });
+export function pickFiles(extensions?: string[] | null, title?: string) {
+  return invoke<PickedFile[]>("pick_files", { extensions: extensions ?? null, title: title ?? null });
+}
+
+/** A file the user attached to a chat message (copied into the app's attachment store). */
+export type ChatFile = { id: string; name: string; size: number; image: boolean; path: string };
+export function attachPaths(paths: string[]) {
+  return invoke<ChatFile[]>("chat_attach", { paths });
+}
+export function attachBytes(name: string, data: string) {
+  return invoke<ChatFile>("chat_attach_bytes", { name, data });
 }

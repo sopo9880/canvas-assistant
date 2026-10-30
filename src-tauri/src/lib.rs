@@ -4,6 +4,7 @@ pub mod canvas_ext;
 pub mod codex;
 pub mod config;
 pub mod db;
+pub mod attachments;
 pub mod extract;
 pub mod generate;
 pub mod learningx;
@@ -355,10 +356,11 @@ async fn canvas_action(state: Shared<'_>, kind: String, params: Value) -> Result
 
 /// Opens the Windows file picker and returns the chosen paths with sizes.
 #[tauri::command]
-async fn pick_files(app: AppHandle, extensions: Option<Vec<String>>) -> Result<Vec<Value>, String> {
+async fn pick_files(app: AppHandle, extensions: Option<Vec<String>>, title: Option<String>) -> Result<Vec<Value>, String> {
     use tauri_plugin_dialog::DialogExt;
     blocking(move || {
-        let mut dialog = app.dialog().file().set_title("제출할 파일 선택");
+        let title = title.filter(|t| !t.trim().is_empty() && t.len() < 80).unwrap_or_else(|| "제출할 파일 선택".into());
+        let mut dialog = app.dialog().file().set_title(&title);
         let exts: Vec<String> = extensions.unwrap_or_default().into_iter()
             .map(|e| e.trim().trim_start_matches('.').to_ascii_lowercase())
             .filter(|e| !e.is_empty() && e.len() <= 10 && e.chars().all(|c| c.is_ascii_alphanumeric())).collect();
@@ -438,6 +440,32 @@ fn open_external(app: AppHandle, url: String) -> Result<(), String> {
         return Err("http(s) 주소만 열 수 있습니다".into());
     }
     app.opener().open_url(parsed.as_str(), None::<&str>).map_err(|e| format!("브라우저를 열 수 없습니다: {e}"))
+}
+
+/// Copies files the user picked or dropped into the chat's attachment store.
+#[tauri::command]
+async fn chat_attach(state: Shared<'_>, paths: Vec<String>) -> Result<Vec<Value>, String> {
+    let s = state.inner().clone();
+    blocking(move || {
+        if paths.len() > 20 {
+            return Err("한 번에 20개까지 첨부할 수 있습니다".into());
+        }
+        paths.iter().map(|p| attachments::store_path(&s.data_dir, std::path::Path::new(p))).collect()
+    }).await
+}
+
+/// Stores a pasted image (base64 from the clipboard).
+#[tauri::command]
+async fn chat_attach_bytes(state: Shared<'_>, name: String, data: String) -> Result<Value, String> {
+    use base64::Engine;
+    let s = state.inner().clone();
+    blocking(move || {
+        if data.len() as u64 > attachments::MAX_BYTES * 4 / 3 + 16 {
+            return Err("첨부가 너무 큽니다 (100MB 이하)".into());
+        }
+        let bytes = base64::engine::general_purpose::STANDARD.decode(data.trim()).map_err(|_| "붙여넣은 데이터를 읽을 수 없습니다".to_string())?;
+        attachments::store(&s.data_dir, &name, &bytes)
+    }).await
 }
 
 /// Opens (or shows in its folder) a file the AI made. Only files inside the AI output folder
@@ -551,6 +579,10 @@ pub fn run() {
             let data_dir = app.path().app_data_dir()?;
             let database = db::Db::open(&data_dir).map_err(|e| Box::<dyn std::error::Error>::from(e))?;
             database.recover_stuck();
+            {
+                let dir = data_dir.clone();
+                std::thread::spawn(move || attachments::cleanup(&dir));
+            }
             let state = Arc::new(AppState {
                 data_dir,
                 codex: Arc::new(codex::CodexState::default()),
@@ -592,7 +624,7 @@ pub fn run() {
             learningx_download,
             pending_list, pending_decide, canvas_action, pick_files, audit_list,
             jobs_list, jobs_update, jobs_run_now, briefings_list,
-            codex_start, codex_call, codex_locate, codex_diagnose, open_external, open_generated, open_generated_folder
+            codex_start, codex_call, codex_locate, codex_diagnose, open_external, open_generated, open_generated_folder, chat_attach, chat_attach_bytes
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Canvas Assistant")

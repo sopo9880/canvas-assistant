@@ -54,9 +54,15 @@ const RESULT_LIMIT = 12000;
 export function composeMessage(text: string, atts: Attachment[]): string {
   if (!atts.length) return text;
   const refs = atts.filter((a): a is Extract<Attachment, { type: "ref" }> => a.type === "ref");
+  const files = atts.filter((a): a is Extract<Attachment, { type: "file" }> => a.type === "file").map((a) => a.file);
   const results = atts.filter((a): a is Extract<Attachment, { type: "tool" }> => a.type === "tool" && a.mode === "result");
   const instruct = atts.filter((a): a is Extract<Attachment, { type: "tool" }> => a.type === "tool" && a.mode === "instruct");
-  const out = [text || "첨부한 항목을 확인해줘."];
+  const out = [text || (files.length && files.length === atts.length ? "첨부한 파일을 확인해줘." : "첨부한 항목을 확인해줘.")];
+  if (files.length) {
+    out.push("[첨부 파일]\n" + files.map((f) => f.image
+      ? `- 이미지 "${f.name}" (메시지에 이미지로 포함)`
+      : `- "${f.name}" (id=${f.id}, ${Math.max(1, Math.round(f.size / 1024))}KB) — read_attachment로 내용 읽기`).join("\n"));
+  }
   if (refs.length) out.push("[첨부된 Canvas 항목]\n" + refs.map((r) => `- ${describeRef(r.ref)}`).join("\n"));
   for (const r of results) {
     let json = JSON.stringify(r.result ?? null);
@@ -69,6 +75,6 @@ export function composeMessage(text: string, atts: Attachment[]): string {
 
 /** Splits a stored user message into what the user typed and the attached context. */
 export function splitMessage(text: string): { main: string; context: string | null } {
-  const i = text.search(/\n\n\[(첨부된 Canvas 항목|도구 결과: |도구 사용 지시)/);
+  const i = text.search(/\n\n\[(첨부 파일|첨부된 Canvas 항목|도구 결과: |도구 사용 지시)\]?/);
   return i === -1 ? { main: text, context: null } : { main: text.slice(0, i), context: text.slice(i + 2) };
 }

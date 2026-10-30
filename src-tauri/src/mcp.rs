@@ -90,6 +90,9 @@ pub fn tool_list() -> Vec<Value> {
         read("canvas_read_submission", "Read what the user actually submitted for an assignment: text body, URL and the CONTENT of every submitted file (code, reports, ZIP projects). attempt picks an earlier attempt; file_id + offset continue one long file.", json!({"course_id": c(), "assignment_id": id_prop("Assignment id"), "attempt": {"type": "integer", "minimum": 1}, "file_id": id_prop("One attachment id"), "offset": {"type": "integer", "minimum": 0}}), &["course_id", "assignment_id"]),
         read("canvas_learningx_resources", "List lecture materials in the course's LearningX '강의자료실' (an external LTI tool many Korean schools use instead of Canvas Files). Returns title, week/section, type and content_id. Use this when canvas_list_files is empty or refused.", json!({"course_id": c()}), &["course_id"]),
         read("canvas_learningx_read", "Read the TEXT CONTENT of one LearningX material (PDF, PPT, documents, code) by content_id from canvas_learningx_resources. Videos cannot be read. Long files are paged with offset.", json!({"course_id": c(), "content_id": {"type": "string"}, "offset": {"type": "integer", "minimum": 0}}), &["course_id", "content_id"]),
+        json!({"name": "read_attachment", "description": "Read the TEXT CONTENT of a file the user attached to their chat message (PDF, Word, PowerPoint, Excel, HWP/HWPX, code, ZIP, ipynb). The message lists attachments as [첨부 파일] with an id. Images are already in the message as images. Long files are paged: call again with next_offset.",
+            "inputSchema": schema(json!({"id": {"type": "string", "description": "Attachment id from the message"}, "offset": {"type": "integer", "minimum": 0}}), &["id"]),
+            "annotations": {"readOnlyHint": true, "openWorldHint": false}}),
         json!({"name": "make_file", "description": "Create a file for the user and save it to their Downloads/Canvas Assistant/AI 생성 folder; the chat then shows Open / Show in folder buttons. \
 Use this whenever the user asks for a file (report, summary, notes, code, data) instead of pasting long content. Formats by the extension of name: .pdf and .docx are rendered from Markdown in content (headings #, lists, ``` code blocks, | tables |), \
 .md/.txt/.csv/.json/.html and source code (.py .c .cpp .java …) are saved as-is, .zip is built from files[] (each {path, content}; nested .pdf/.docx entries are rendered too). Executables are refused. Never overwrites existing files.",
@@ -250,6 +253,9 @@ pub fn read_tool(client: &canvas::Client, name: &str, args: &Value) -> Result<Va
 /// Runs one tool. Returns (text, is_error).
 pub fn call_tool(data_dir: &Path, name: &str, args: &Value) -> (String, bool) {
     let result: Result<Value, String> = (|| {
+        if name == "read_attachment" {
+            return crate::attachments::read(data_dir, args);
+        }
         if name == "make_file" {
             let out = crate::generate::make_file(&output_dir(data_dir), args)?;
             if let Ok(db) = Db::open(data_dir) {

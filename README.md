@@ -7,6 +7,7 @@ Canvas LMS와 Codex(ChatGPT)를 연결한 Windows·macOS용 개인 학습 비서
 ## 주요 기능
 
 - **AI 대화**: "이번 주 마감 과제 정리해줘", "최근 공지 요약해줘"처럼 물어보면 Codex가 Canvas 도구 47개와 파일 만들기 도구로 직접 조회해서 답합니다. 강의자료(PDF·PPT·Word·한글·코드)와 내가 낸 제출물의 **내용까지 읽고** 답합니다. 입력창의 🧰 버튼으로 도구를 직접 실행해 결과를 첨부할 수 있고, 대화는 보관·삭제할 수 있습니다.
+- **채팅 첨부·수정·끼어들기**: 📎·끌어다 놓기·붙여넣기로 파일과 이미지를 첨부하고, 이전 메시지를 고쳐 다시 묻고, AI가 작업하는 중에도 메시지를 보내 방향을 바꿀 수 있습니다.
 - **AI가 만든 파일 받기**: PDF·Word·ZIP·코드·CSV 등을 AI에게 만들어 달라고 하면 `다운로드/Canvas Assistant/AI 생성`에 저장되고 대화에서 바로 열 수 있습니다.
 - **우클릭 메뉴**: 과제·공지·파일·강의를 우클릭해 AI 채팅에 추가, 바로 분석, 제출, 완료 표시.
 - **LearningX 강의자료실**: 강의자료실이 LearningX(외부 도구)인 학교도 앱에서 자료 목록·내용 보기·다운로드·AI 요약이 됩니다.
@@ -57,6 +58,7 @@ Codex는 앱에 포함되어 있어서 따로 설치할 필요가 없습니다.
 | `src-tauri/src/extract.rs` | 파일 텍스트 추출 (PDF, Office, 한글, 코드, ZIP, ipynb) |
 | `src-tauri/src/materials.rs` | Canvas 파일·내 제출물 내용 읽기 |
 | `src-tauri/src/learningx.rs` | LearningX 강의자료실 (LTI 실행, 메모리 쿠키, 자료 목록·다운로드) |
+| `src-tauri/src/attachments.rs` | 채팅 첨부 파일 보관(앱 폴더 복사본, 30일)과 read_attachment |
 | `src-tauri/src/generate.rs` | AI가 만드는 파일 (PDF, DOCX, ZIP, 텍스트·코드) |
 | `src-tauri/src/mcp.rs` | Codex가 실행하는 Canvas MCP 서버 (`canvas-assistant.exe --mcp-canvas`) |
 | `src-tauri/src/db.rs` | SQLite: 승인 대기열, 예약 작업, 알림 중복 방지, 활동 기록 |

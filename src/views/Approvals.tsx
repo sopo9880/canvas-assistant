@@ -4,6 +4,7 @@ import { api, errorText, Pending } from "../api";
 import { Badge, Banner, Empty, Spinner } from "../components";
 import { bytes, formatDate, formatUnix } from "../util";
 import { PickedFile, pickFiles } from "../shared";
+import { useApp } from "../App";
 
 const kindLabel: Record<string, string> = {
   submit_text: "과제 텍스트 제출",
@@ -36,6 +37,7 @@ const editable: Record<string, Array<[string, string, "text" | "area"]>> = {
 
 function Editor({ p, edits, setEdits, files, setFiles }: { p: Pending; edits: Record<string, string>; setEdits: (e: Record<string, string>) => void; files: PickedFile[]; setFiles: (f: PickedFile[]) => void }) {
   const fields = editable[p.kind] ?? [];
+  const { recentFiles } = useApp();
   if (!fields.length && p.kind !== "submit_files") return null;
   return (
     <div className="approval-edit">
@@ -43,6 +45,14 @@ function Editor({ p, edits, setEdits, files, setFiles }: { p: Pending; edits: Re
       {p.kind === "submit_files" && (
         <div className="submit-files">
           <button onClick={async () => { const picked = await pickFiles(); setFiles([...files, ...picked.filter((x) => !files.some((f) => f.path === x.path))]); }}>📎 제출할 파일 첨부</button>
+          {recentFiles.filter((r) => !files.some((f) => f.path === r.path)).length > 0 && (
+            <div className="row wrap small">
+              <span className="muted">채팅에 첨부한 파일:</span>
+              {recentFiles.filter((r) => !files.some((f) => f.path === r.path)).slice(0, 8).map((r) => (
+                <button key={r.id} className="chip-btn" title="눌러서 제출 파일에 추가" onClick={() => setFiles([...files, { path: r.path, name: r.name, size: r.size }])}>＋ {r.name}</button>
+              ))}
+            </div>
+          )}
           {files.length === 0 ? <p className="small error-text">파일을 첨부해야 승인할 수 있습니다. AI는 파일을 고를 수 없습니다.</p> : (
             <ul className="list compact">{files.map((f) => (
               <li key={f.path} className="list-item"><span className="grow">{f.name} <span className="muted small">{bytes(f.size)}</span></span>

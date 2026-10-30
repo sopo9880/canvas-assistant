@@ -8,7 +8,7 @@ import Approvals from "./views/Approvals";
 import Automation from "./views/Automation";
 import SettingsView from "./views/Settings";
 import Messages from "./views/Messages";
-import { CanvasRef } from "./shared";
+import { CanvasRef, ChatFile } from "./shared";
 import ContextMenu, { MenuState } from "./ContextMenu";
 import SubmitDialog from "./SubmitDialog";
 
@@ -17,7 +17,8 @@ export type Tab = "chat" | "canvas" | "messages" | "approvals" | "automation" | 
 /** Something attached to the next chat message. */
 export type Attachment =
   | { type: "ref"; key: string; ref: CanvasRef }
-  | { type: "tool"; key: string; tool: string; label: string; args: Record<string, unknown>; mode: "result" | "instruct"; result?: unknown };
+  | { type: "tool"; key: string; tool: string; label: string; args: Record<string, unknown>; mode: "result" | "instruct"; result?: unknown }
+  | { type: "file"; key: string; file: ChatFile };
 
 export type CodexStatus = {
   state: "starting" | "ready" | "error";
@@ -48,6 +49,7 @@ type Ctx = {
   askAI: (prompt: string, opts?: { send?: boolean; refs?: CanvasRef[] }) => void;
   pendingCount: number;
   attachments: Attachment[];
+  recentFiles: ChatFile[];
   addAttachment: (a: Attachment) => void;
   removeAttachment: (key: string) => void;
   clearAttachments: () => void;
@@ -65,6 +67,8 @@ export default function App() {
   const [pendingCount, setPendingCount] = useState(0);
   const [prefill, setPrefill] = useState<{ text: string; n: number; send?: boolean } | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  // Files attached in chat this session, offered as quick picks on approval cards.
+  const [recentFiles, setRecentFiles] = useState<ChatFile[]>([]);
   const [menu, setMenu] = useState<MenuState>(null);
   const [submitRef, setSubmitRef] = useState<CanvasRef | null>(null);
   const retries = useRef(0);
@@ -158,7 +162,8 @@ export default function App() {
   }, []);
 
   const addAttachment = useCallback((a: Attachment) => {
-    setAttachments((old) => (old.some((x) => x.key === a.key) ? old : [...old, a].slice(-8)));
+    setAttachments((old) => (old.some((x) => x.key === a.key) ? old : [...old, a].slice(-20)));
+    if (a.type === "file") setRecentFiles((old) => [a.file, ...old.filter((f) => f.id !== a.file.id)].slice(0, 20));
   }, []);
   const removeAttachment = useCallback((key: string) => setAttachments((old) => old.filter((x) => x.key !== key)), []);
   const clearAttachments = useCallback(() => setAttachments([]), []);
@@ -176,7 +181,7 @@ export default function App() {
 
   const ctx: Ctx = {
     info, login, loginError, startLogin, cancelLogin, refreshInfo, codex, connectCodex, refreshAccount, go: setTab, askAI, pendingCount,
-    attachments, addAttachment, removeAttachment, clearAttachments, openMenu, openSubmit: setSubmitRef,
+    attachments, recentFiles, addAttachment, removeAttachment, clearAttachments, openMenu, openSubmit: setSubmitRef,
   };
   const canvasReady = !!(info?.hasToken && info.settings.canvasBaseUrl);
 

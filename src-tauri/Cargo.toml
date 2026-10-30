@@ -30,6 +30,7 @@ encoding_rs = "0.8"
 pdf-extract = "0.9"
 printpdf = { version = "0.7", default-features = false, features = ["font_subsetting"] }
 ttf-parser = "0.19"
+base64 = "0.22"
 url = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
 rusqlite = { version = "0.37", features = ["bundled"] }

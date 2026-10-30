@@ -8,11 +8,11 @@ import { Banner, Markdown, Spinner } from "../components";
 import CodexLogin from "../CodexLogin";
 import ToolPicker from "../ToolPicker";
 import { composeMessage, splitMessage } from "../toolkit";
-import { describeRef, kindLabel } from "../shared";
+import { attachBytes, attachPaths, describeRef, kindLabel, pickFiles } from "../shared";
 import { bytes, effortLabels, toolLabels } from "../util";
 
 type Entry =
-  | { kind: "user"; id: string; text: string }
+  | { kind: "user"; id: string; text: string; turnId?: string; images?: string[]; steered?: boolean }
   | { kind: "assistant"; id: string; text: string; done: boolean }
   | { kind: "tool"; id: string; tool: string; server: string; status: "running" | "done" | "error"; detail?: string; file?: MadeFile };
 
@@ -29,8 +29,14 @@ const suggestions = [
 
 function itemToEntry(item: any): Entry | null {
   switch (item?.type) {
-    case "userMessage":
-      return { kind: "user", id: item.id, text: (item.content ?? []).map((c: any) => c.text ?? "").join("\n") };
+    case "userMessage": {
+      const content: any[] = item.content ?? [];
+      return {
+        kind: "user", id: item.id,
+        text: content.filter((c) => c.type === "text").map((c) => c.text ?? "").join("\n"),
+        images: content.filter((c) => c.type === "localImage").map((c) => attachmentId(String(c.path ?? ""))).filter((x): x is string => !!x),
+      };
+    }
     case "agentMessage":
       return { kind: "assistant", id: item.id, text: item.text ?? "", done: true };
     case "mcpToolCall":
@@ -43,6 +49,20 @@ function itemToEntry(item: any): Entry | null {
     default:
       return null;
   }
+}
+
+/** Attachment id from a stored image path (…/attachments/<id>/<name>). */
+function attachmentId(path: string): string | undefined {
+  return /attachments[\\/]([0-9a-f]{20})[\\/]/.exec(path)?.[1];
+}
+
+function fileToBase64(file: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).replace(/^data:[^,]*,/, ""));
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(file);
+  });
 }
 
 /** Error text of a failed tool call, so the user sees why instead of only the AI's summary. */
@@ -96,7 +116,9 @@ function fileIcon(name: string) {
 }
 
 export default function Chat({ prefill }: { prefill: { text: string; n: number; send?: boolean } | null }) {
-  const { codex, info, refreshInfo, go, attachments, removeAttachment, clearAttachments } = useApp();
+  const { codex, info, refreshInfo, go, attachments, addAttachment, removeAttachment, clearAttachments } = useApp();
+  const [dragging, setDragging] = useState(false);
+  const [editing, setEditing] = useState<string | null>(null);
   const [picker, setPicker] = useState(false);
   const [models, setModels] = useState<Model[]>([]);
   const [model, setModel] = useState("");
@@ -168,10 +190,13 @@ export default function Chat({ prefill }: { prefill: { text: string; n: number; 
         return;
       }
       switch (method) {
-        case "turn/started":
-          setTurnId(params?.turn?.id ?? "");
+        case "turn/started": {
+          const tid = params?.turn?.id ?? "";
+          setTurnId(tid);
           setBusy(true);
+          if (tid) setEntries((old) => old.map((e) => (e.kind === "user" && !e.turnId ? { ...e, turnId: tid } : e)));
           break;
+        }
         case "item/agentMessage/delta":
           setEntries((old) => {
             const i = old.findIndex((e) => e.kind === "assistant" && e.id === params.itemId);
@@ -249,23 +274,41 @@ export default function Chat({ prefill }: { prefill: { text: string; n: number; 
       const list: Entry[] = [];
       for (const turn of [...(r.data ?? [])].reverse()) for (const item of turn.items ?? []) {
         const e = itemToEntry(item);
+        if (e?.kind === "user") e.turnId = turn.id;
         if (e) list.push(e);
       }
       if (threadRef.current === id) setEntries(list);
     } catch (e) { setError(errorText(e)); }
   }
 
-  async function send(textArg?: string) {
+  /** `fromComposer: false` resends an edited message as-is, without the composer's pending attachments. */
+  async function send(textArg?: string, extraImages: string[] = [], fromComposer = true) {
+    const pending = fromComposer ? attachments : [];
     const typed = (textArg ?? draft).trim();
-    if ((!typed && attachments.length === 0) || busy || !ready) return;
-    const text = composeMessage(typed, attachments);
+    if ((!typed && pending.length === 0 && extraImages.length === 0) || !ready) return;
+    const steering = busy && !!turnId && !!threadId;
+    if (busy && !steering) return;
+    const text = fromComposer ? composeMessage(typed, pending) : typed;
+    const images = [...extraImages, ...pending.flatMap((a) => (a.type === "file" && a.file.image ? [a.file.id] : []))];
     setBusy(true);
     setError("");
-    setDraft("");
-    clearAttachments();
+    if (fromComposer) {
+      setDraft("");
+      clearAttachments();
+    }
     stick.current = true;
-    setEntries((old) => [...old, { kind: "user", id: `local-${Date.now()}`, text }]);
+    const localId = `local-${Date.now()}`;
+    setEntries((old) => [...old, { kind: "user", id: localId, text, images, steered: steering, turnId: steering ? turnId : undefined }]);
     try {
+      if (steering) {
+        try {
+          await api.codex("turn/steer", { threadId, expectedTurnId: turnId, text, images });
+          return;
+        } catch {
+          // The turn ended in the meantime: send it as a new turn instead.
+          setEntries((old) => old.map((e) => (e.id === localId && e.kind === "user" ? { ...e, steered: false, turnId: undefined } : e)));
+        }
+      }
       let id = threadId;
       if (!id) {
         const r = await api.codex<{ thread: { id: string } }>("thread/start", { model });
@@ -274,12 +317,68 @@ export default function Chat({ prefill }: { prefill: { text: string; n: number; 
         setThreadId(id);
         threadRef.current = id;
       }
-      await api.codex("turn/start", { threadId: id, text, model, effort });
+      const r = await api.codex<{ turn?: { id: string } }>("turn/start", { threadId: id, text, model, effort, images });
+      const tid = r?.turn?.id;
+      if (tid) {
+        setTurnId((cur) => cur || tid);
+        setEntries((old) => old.map((e) => (e.id === localId && e.kind === "user" ? { ...e, turnId: tid } : e)));
+      }
     } catch (e) {
       setBusy(false);
       setError(errorText(e));
     }
   }
+
+  /** Edit an earlier message: drop its turn and everything after it, then send the new text. */
+  async function editMessage(entry: Extract<Entry, { kind: "user" }>, main: string) {
+    setEditing(null);
+    if (!threadId || !entry.turnId || busy) return;
+    const { context } = splitMessage(entry.text);
+    const text = main.trim() + (context ? `\n\n${context}` : "");
+    if (!main.trim() && !context) return;
+    try {
+      await api.codex("thread/revert", { threadId, beforeTurnId: entry.turnId });
+      const index = entries.findIndex((e) => e.kind === "user" && e.turnId === entry.turnId);
+      setEntries((old) => old.slice(0, index === -1 ? old.length : index));
+      await send(text, entry.images ?? [], false);
+    } catch (e) {
+      setError(`메시지를 수정하지 못했습니다: ${errorText(e)}`);
+    }
+  }
+
+  async function attachFiles(paths: string[]) {
+    if (!paths.length) return;
+    try {
+      for (const f of await attachPaths(paths)) addAttachment({ type: "file", key: `file:${f.id}`, file: f });
+    } catch (e) { setError(errorText(e)); }
+  }
+
+  async function onPaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const files = Array.from(e.clipboardData?.files ?? []);
+    if (!files.length) return;
+    e.preventDefault();
+    for (const f of files.slice(0, 10)) {
+      try {
+        const name = f.name && f.name !== "image.png" ? f.name : `붙여넣은 이미지 ${new Date().toLocaleTimeString("ko-KR", { hour12: false }).replace(/:/g, "")}.${(f.type.split("/")[1] || "png").replace("jpeg", "jpg")}`;
+        const saved = await attachBytes(name, await fileToBase64(f));
+        addAttachment({ type: "file", key: `file:${saved.id}`, file: saved });
+      } catch (err) { setError(errorText(err)); }
+    }
+  }
+
+  // Files dropped onto the window (Tauri gives real paths).
+  useEffect(() => {
+    let un: (() => void) | undefined;
+    let alive = true;
+    void import("@tauri-apps/api/webview").then(({ getCurrentWebview }) => getCurrentWebview().onDragDropEvent((ev) => {
+      const t = ev.payload.type;
+      if (t === "enter" || t === "over") setDragging(true);
+      else if (t === "leave") setDragging(false);
+      else if (t === "drop") { setDragging(false); void attachFiles(ev.payload.paths ?? []); }
+    })).then((f) => { if (alive) un = f; else f(); }).catch(() => undefined);
+    return () => { alive = false; un?.(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // "AI로 바로 분석" from a right-click menu sends as soon as the chat is ready.
   useEffect(() => {
@@ -408,7 +507,8 @@ export default function Chat({ prefill }: { prefill: { text: string; n: number; 
         )}
         {entries.map((e) =>
           e.kind === "user" ? (
-            <UserBubble key={e.id} text={e.text} />
+            <UserBubble key={e.id} entry={e} editing={editing === e.id} canEdit={!!e.turnId && !busy && !e.steered}
+              onEdit={() => setEditing(e.id)} onCancel={() => setEditing(null)} onSave={(t) => void editMessage(e, t)} />
           ) : e.kind === "assistant" ? (
             <div key={e.id} className="msg assistant">
               <Markdown text={e.text} />
@@ -432,41 +532,68 @@ export default function Chat({ prefill }: { prefill: { text: string; n: number; 
       {attachments.length > 0 && (
         <div className="attach-row" aria-label="첨부">
           {attachments.map((a) => (
-            <span key={a.key} className={"attach-chip" + (a.type === "tool" ? " tool" : "")} title={a.type === "ref" ? describeRef(a.ref) : a.tool}>
-              {a.type === "ref" ? `${kindLabel[a.ref.kind]} · ${a.ref.label}` : (a.mode === "result" ? "🧰 " : "🤖 ") + a.label}
+            <span key={a.key} className={"attach-chip" + (a.type === "tool" ? " tool" : "")} title={a.type === "ref" ? describeRef(a.ref) : a.type === "file" ? `${a.file.name} (${bytes(a.file.size)})` : a.tool}>
+              {a.type === "ref" ? `${kindLabel[a.ref.kind]} · ${a.ref.label}` : a.type === "file" ? `${a.file.image ? "🖼" : "📎"} ${a.file.name}` : (a.mode === "result" ? "🧰 " : "🤖 ") + a.label}
               <button className="ghost icon" aria-label="첨부 빼기" onClick={() => removeAttachment(a.key)}>✕</button>
             </span>
           ))}
         </div>
       )}
-      <div className="composer">
-        <button className="tool-btn" onClick={() => setPicker(true)} title="Canvas 도구 불러오기" aria-label="Canvas 도구" disabled={!canvasReady}>🧰</button>
+      <div className={"composer" + (dragging ? " dragging" : "")}>
+        {dragging && <div className="drop-hint" aria-hidden>여기에 놓으면 첨부합니다</div>}
+        <div className="composer-tools">
+          <button className="tool-btn" onClick={async () => { try { await attachFiles((await pickFiles(null, "채팅에 첨부할 파일")).map((f) => f.path)); } catch (e) { setError(errorText(e)); } }}
+            title="파일 첨부 (PDF·문서·코드·이미지, 끌어다 놓기·붙여넣기도 됨)" aria-label="파일 첨부" disabled={!ready}>📎</button>
+          <button className="tool-btn" onClick={() => setPicker(true)} title="Canvas 도구 불러오기" aria-label="Canvas 도구" disabled={!canvasReady}>🧰</button>
+        </div>
         <textarea
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
+          onPaste={(e) => void onPaste(e)}
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }}
-          placeholder={ready ? "메시지를 입력하세요 (Shift+Enter 줄바꿈)" : "Codex 로그인 후 사용할 수 있습니다"}
+          placeholder={!ready ? "Codex 로그인 후 사용할 수 있습니다" : busy ? "작업 중에도 보낼 수 있어요 — 보낸 내용은 지금 작업에 바로 반영됩니다" : "메시지를 입력하세요 (Shift+Enter 줄바꿈, 파일은 끌어다 놓기·붙여넣기)"}
           disabled={!ready}
           rows={2}
         />
-        {busy && turnId ? (
-          <button className="stop" onClick={() => void interrupt()} title="응답 중단">■</button>
-        ) : (
-          <button className="send primary" onClick={() => void send()} disabled={!ready || (!draft.trim() && attachments.length === 0) || busy} title="보내기">↑</button>
-        )}
+        {busy && turnId && <button className="stop" onClick={() => void interrupt()} title="응답 중단">■</button>}
+        <button className="send primary" onClick={() => void send()} disabled={!ready || (!draft.trim() && attachments.length === 0) || (busy && !turnId)}
+          title={busy ? "작업 중인 AI에게 추가로 보내기" : "보내기"}>↑</button>
       </div>
       {picker && <ToolPicker onClose={() => setPicker(false)} />}
     </div>
   );
 }
 
-function UserBubble({ text }: { text: string }) {
-  const { main, context } = splitMessage(text);
+function UserBubble({ entry, editing, canEdit, onEdit, onCancel, onSave }: {
+  entry: Extract<Entry, { kind: "user" }>; editing: boolean; canEdit: boolean;
+  onEdit: () => void; onCancel: () => void; onSave: (text: string) => void;
+}) {
+  const { main, context } = splitMessage(entry.text);
+  const [value, setValue] = useState(main);
+  useEffect(() => { if (editing) setValue(main); }, [editing, main]);
   const count = context ? (context.match(/^- |^\[도구 결과/gm) ?? []).length : 0;
+  if (editing) {
+    return (
+      <div className="msg user editing">
+        <div className="bubble edit-box">
+          <textarea autoFocus value={value} onChange={(e) => setValue(e.target.value)} rows={Math.min(10, Math.max(2, value.split("\n").length))}
+            onKeyDown={(e) => { if (e.key === "Escape") onCancel(); if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); onSave(value); } }} />
+          <p className="muted small">보내면 이 메시지부터 아래 대화가 지워지고 새로 답합니다. 첨부는 그대로 유지됩니다.</p>
+          <div className="row end">
+            <button onClick={onCancel}>취소</button>
+            <button className="primary" onClick={() => onSave(value)} disabled={!value.trim() && !context}>보내기</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="msg user">
+      {canEdit && <button className="ghost icon edit-msg" title="메시지 수정" aria-label="메시지 수정" onClick={onEdit}>✎</button>}
       <div className="bubble">
+        {entry.steered && <div className="steer-tag">작업 중 추가</div>}
         {main}
+        {(entry.images?.length ?? 0) > 0 && <div className="muted small">🖼 이미지 {entry.images!.length}개</div>}
         {context && (
           <details className="bubble-context">
             <summary>첨부 {count || ""}개 보기</summary>

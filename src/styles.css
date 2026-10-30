@@ -342,3 +342,15 @@ button.icon.danger:hover:not(:disabled) { color: var(--coral); }
 .file-card { align-self: flex-start; display: flex; align-items: center; gap: 12px; max-width: min(560px, 100%); background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
 .file-card .file-icon { font-size: 26px; }
 .file-card .title { font-weight: 600; overflow-wrap: anywhere; }
+.composer { position: relative; }
+.composer-tools { display: flex; gap: 6px; flex: none; }
+.composer.dragging { border-color: var(--accent, #2bb3a3); box-shadow: 0 0 0 3px rgba(43, 179, 163, 0.18); }
+.drop-hint { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; border-radius: 16px; background: rgba(16, 23, 35, 0.72); color: #fff; font-weight: 600; pointer-events: none; z-index: 2; }
+.msg.user { position: relative; display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
+.msg.user .edit-msg { opacity: 0; transition: opacity 0.15s; align-self: center; margin-right: 4px; }
+.msg.user:hover .edit-msg, .msg.user .edit-msg:focus-visible { opacity: 1; }
+.msg.user.editing .bubble { width: min(640px, 100%); }
+.edit-box textarea { width: 100%; resize: vertical; min-height: 60px; background: var(--bg); border: 1px solid var(--line-2); border-radius: 10px; padding: 8px 10px; color: inherit; font: inherit; }
+.edit-box p { margin: 6px 0; }
+.steer-tag { display: inline-block; font-size: 11px; font-weight: 600; opacity: 0.75; margin-bottom: 2px; }
+.chip-btn { padding: 3px 10px; border-radius: 99px; font-size: 12.5px; }

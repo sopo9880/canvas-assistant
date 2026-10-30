@@ -60,18 +60,23 @@ mockIPC((cmd, args: any) => {
       if (m === "model/list") return { data: [{ id: "gpt-6.1-sol", model: "gpt-6.1-sol", displayName: "GPT-6.1-Sol", isDefault: true, defaultReasoningEffort: "medium", supportedReasoningEfforts: [{ reasoningEffort: "low" }, { reasoningEffort: "medium" }, { reasoningEffort: "high" }] }] };
       if (m === "thread/list") { threadsCalled = true; return { data: [{ id: "t1", name: "이번 주 과제 정리", updatedAt: 1 }, { id: "t2", name: "원자로이론 HW8 개념 질문", updatedAt: 1 }, { id: "t3", preview: "열전달 핀 효율 공식이 왜 tanh가 나와?", updatedAt: 1 }] }; }
       if (m === "thread/resume") return {};
+      if (m === "thread/revert") return { thread: {} };
+      if (m === "turn/steer") return { turnId: "u1" };
+      if (m === "turn/start") return { turn: { id: "u9" } };
       if (m === "account/login/start") return args.params.type === "chatgpt" ? { type: "chatgpt", loginId: "l1", authUrl: "https://auth.openai.com/x" } : { type: "chatgptDeviceCode", loginId: "l2", userCode: "ABCD-1234", verificationUrl: "https://auth.openai.com/codex/device" };
-      if (m === "thread/turns/list") return { data: [{ items: [
+      if (m === "thread/turns/list") return { data: [{ id: "u1", items: [
         { type: "agentMessage", id: "i6", text: "**이번_주_과제_정리.pdf**를 만들었습니다. 마감 순서표와 과제별 할 일이 들어 있어요." },
         { type: "mcpToolCall", id: "i5", server: "canvas", tool: "make_file", status: "completed", result: { content: [{ type: "text", text: JSON.stringify({ saved: true, name: "이번_주_과제_정리.pdf", path: "C:\\Users\\sopo\\Downloads\\Canvas Assistant\\AI 생성\\이번_주_과제_정리.pdf", size: 48213 }) }] } },
         { type: "agentMessage", id: "i4", text: answer },
         { type: "mcpToolCall", id: "i3b", server: "canvas", tool: "propose_planner_note", status: "completed" },
         { type: "mcpToolCall", id: "i3", server: "canvas", tool: "canvas_upcoming", status: "completed" },
         { type: "mcpToolCall", id: "i2", server: "canvas", tool: "canvas_list_courses", status: "completed" },
-        { type: "userMessage", id: "i1", content: [{ type: "text", text: "이번 주 마감인 과제를 마감 순서대로 정리해줘" }] },
+        { type: "userMessage", id: "i1", content: [{ type: "text", text: "이번 주 마감인 과제를 마감 순서대로 정리해줘\n\n[첨부 파일]\n- \"HW6_핀열전달.pdf\" (id=00000000000000000001, 470KB) — read_attachment로 내용 읽기" }, { type: "localImage", path: "C:\\x\\attachments\\00000000000000000002\\shot.png" }] },
       ].reverse() }] };
       return {};
     }
+    case "chat_attach": return (args.paths as string[]).map((p: string, i: number) => ({ id: `0000000000000000000${i}`, name: p.split(/[\\/]/).pop(), size: 482133, image: /\.(png|jpe?g)$/i.test(p), path: p }));
+    case "chat_attach_bytes": return { id: "000000000000000000aa", name: args.name, size: 2048, image: true, path: "x" };
     case "pick_files": return [{ path: "C:\\Users\\sopo\\Documents\\HW6_핀열전달.pdf", name: "HW6_핀열전달.pdf", size: 482133 }];
     case "canvas_action": return { ok: true, workflow_state: "submitted", attempt: 1 };
     case "canvas_query": {

@@ -193,6 +193,10 @@ fn developer_instructions() -> String {
          - 사용자가 '내가 냈던 코드/보고서'를 물으면 canvas_read_submission(course_id, assignment_id)으로 실제 제출 파일 내용을 읽으세요. 예전 시도는 attempt로 고릅니다. 과제를 모르면 canvas_list_submissions로 제출한 과제를 찾으세요.\n\
          - 긴 파일은 next_offset이 오면 필요한 만큼 이어서 읽으세요.\n\
          \n\
+         [첨부 파일]\n\
+         - 사용자가 메시지에 [첨부 파일] 목록을 붙이면 read_attachment(id)로 내용을 읽고 답하세요. 이미지는 메시지에 이미지로 들어 있으니 직접 보고 답하세요.\n\
+         - 대화 중간에 사용자가 메시지를 추가로 보낼 수 있습니다. 새 메시지가 오면 그 내용을 반영해 이어서 작업하세요.\n\
+         \n\
          [파일 만들기]\n\
          - 사용자가 PDF·Word·ZIP·코드·CSV 같은 파일을 원하거나, 정리한 내용이 길어 파일로 주는 게 나으면 make_file 도구로 만드세요. PDF/DOCX는 Markdown(#, 목록, ``` 코드, | 표 |)으로 내용을 쓰고, ZIP은 files 목록으로 여러 파일을 넣습니다.\n\
          - 만든 뒤에는 대화에 '열기'·'폴더에서 보기' 버튼이 나오므로, 파일 이름과 들어 있는 내용만 짧게 알려주세요. 파일 내용 전체를 대화에 다시 붙여넣지 마세요.\n\
@@ -259,6 +263,27 @@ fn safe_effort(v: &Value) -> Result<Option<String>, String> {
 
 /// Builds the parameters actually sent to Codex. Anything not listed is refused.
 pub fn validated_request(method: &str, input: &Value, workspace: &str, mcp: Option<&Value>) -> Result<Value, String> {
+    validated_request_with_images(method, input, workspace, mcp, &[])
+}
+
+/// Message input: the text plus images the user attached. Image paths are resolved by the
+/// caller from attachment ids (never taken from the UI as paths).
+fn message_input(input: &Value, images: &[PathBuf]) -> Result<Value, String> {
+    let text = input.get("text").and_then(Value::as_str).unwrap_or("").trim();
+    if (text.is_empty() && images.is_empty()) || text.len() > 40_000 {
+        return Err("메시지는 1~40,000바이트여야 합니다".into());
+    }
+    let mut items = Vec::new();
+    if !text.is_empty() {
+        items.push(json!({"type": "text", "text": text}));
+    }
+    for p in images.iter().take(10) {
+        items.push(json!({"type": "localImage", "path": p.to_string_lossy()}));
+    }
+    Ok(json!(items))
+}
+
+pub fn validated_request_with_images(method: &str, input: &Value, workspace: &str, mcp: Option<&Value>, images: &[PathBuf]) -> Result<Value, String> {
     match method {
         "account/read" => Ok(json!({"refreshToken": false})),
         "account/logout" => Ok(json!({})),
@@ -327,13 +352,9 @@ pub fn validated_request(method: &str, input: &Value, workspace: &str, mcp: Opti
         }
         "thread/archive" | "thread/delete" => Ok(json!({"threadId": safe_identifier(input, "threadId")?})),
         "turn/start" => {
-            let text = input.get("text").and_then(Value::as_str).ok_or("Message text is required")?.trim();
-            if text.is_empty() || text.len() > 20_000 {
-                return Err("메시지는 1~20,000바이트여야 합니다".into());
-            }
             let mut params = json!({
                 "threadId": safe_identifier(input, "threadId")?,
-                "input": [{"type": "text", "text": text}],
+                "input": message_input(input, images)?,
             });
             if let Some(model) = safe_model(input)? {
                 params["model"] = json!(model);
@@ -343,6 +364,17 @@ pub fn validated_request(method: &str, input: &Value, workspace: &str, mcp: Opti
             }
             Ok(params)
         }
+        // A message sent while the AI is still working joins the running turn.
+        "turn/steer" => Ok(json!({
+            "threadId": safe_identifier(input, "threadId")?,
+            "expectedTurnId": safe_identifier(input, "expectedTurnId")?,
+            "input": message_input(input, images)?,
+        })),
+        // Editing an earlier message: drop that turn and everything after it from the history.
+        "thread/revert" => Ok(json!({
+            "threadId": safe_identifier(input, "threadId")?,
+            "beforeTurnId": safe_identifier(input, "beforeTurnId")?,
+        })),
         "turn/interrupt" => Ok(json!({
             "threadId": safe_identifier(input, "threadId")?,
             "turnId": safe_identifier(input, "turnId")?
@@ -509,7 +541,18 @@ impl CodexState {
         } else {
             None
         };
-        let safe = validated_request(method, params, &workspace, mcp.as_ref())?;
+        // Attached images: the UI sends attachment ids; only files in the attachment store qualify.
+        let images: Vec<PathBuf> = if matches!(method, "turn/start" | "turn/steer") {
+            params.get("images").and_then(Value::as_array).map(|ids| {
+                ids.iter().filter_map(Value::as_str).take(10)
+                    .map(|id| crate::attachments::path_for(&data_dir, id))
+                    .collect::<Result<Vec<_>, _>>()
+            }).transpose()?.unwrap_or_default()
+                .into_iter().filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(crate::attachments::is_image)).collect()
+        } else {
+            Vec::new()
+        };
+        let safe = validated_request_with_images(method, params, &workspace, mcp.as_ref(), &images)?;
         let timeout = if method == "thread/start" || method == "thread/resume" { Duration::from_secs(60) } else { Duration::from_secs(30) };
         self.request_raw(method, safe, timeout)
     }
@@ -624,6 +667,22 @@ pub fn path_display(p: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn steer_revert_and_images_are_validated() {
+        let st = validated_request("turn/steer", &json!({"threadId": "t1", "expectedTurnId": "u1", "text": "추가"}), "/w", None).unwrap();
+        assert_eq!(st, json!({"threadId": "t1", "expectedTurnId": "u1", "input": [{"type": "text", "text": "추가"}]}));
+        assert!(validated_request("turn/steer", &json!({"threadId": "t1", "text": "x"}), "/w", None).is_err(), "expectedTurnId required");
+        let rv = validated_request("thread/revert", &json!({"threadId": "t1", "beforeTurnId": "u2", "extra": 1}), "/w", None).unwrap();
+        assert_eq!(rv, json!({"threadId": "t1", "beforeTurnId": "u2"}));
+        assert!(validated_request("thread/revert", &json!({"threadId": "t1", "beforeTurnId": "../x"}), "/w", None).is_err());
+        // Paths in the UI input are ignored; only resolved attachment images are sent.
+        let p = validated_request("turn/start", &json!({"threadId": "t1", "text": "", "input": [{"type": "localImage", "path": "/etc/passwd"}]}), "/w", None);
+        assert!(p.is_err());
+        let img = PathBuf::from("/data/attachments/x/a.png");
+        let p = validated_request_with_images("turn/start", &json!({"threadId": "t1", "text": ""}), "/w", None, &[img]).unwrap();
+        assert_eq!(p["input"], json!([{"type": "localImage", "path": "/data/attachments/x/a.png"}]));
+    }
+
     #[test]
     fn finds_code_mode_host_next_to_codex() {
         let dir = std::env::temp_dir().join(format!("ca-host-{}", std::process::id()));
