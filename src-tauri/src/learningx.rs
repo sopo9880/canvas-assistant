@@ -371,7 +371,11 @@ fn session(client: &Client, course: u64, fresh: bool) -> Result<Session> {
                 // Make sure this tool actually serves the resources API.
                 match resources_raw(&mut s, course) {
                     Ok(_) => return Ok(s),
-                    Err(e) => last = Some(e),
+                    // Some schools only have 주차학습 (modules), not 강의자료실.
+                    Err(e) => match api_json(&mut s, &format!("courses/{course}/modules?include_detail=true")) {
+                        Ok(_) => return Ok(s),
+                        Err(_) => last = Some(e),
+                    },
                 }
             }
             Err(e) => last = Some(e),
@@ -391,6 +395,82 @@ fn resources_raw(s: &mut Session, course: u64) -> Result<Value> {
         return Err(lx_error(format!("LearningX 자료 목록을 가져오지 못했습니다 (HTTP {})", r.status)));
     }
     serde_json::from_slice(&r.body).map_err(|_| lx_error("LearningX 응답이 JSON이 아닙니다 (자료실이 LearningX가 아닐 수 있음)"))
+}
+
+
+/// GET <lx_origin>/learningx/api/v1/<path> as JSON (read-only, never opens a lecture item).
+fn api_json(s: &mut Session, path: &str) -> Result<Value> {
+    let url = format!("{}/learningx/api/v1/{path}", s.lx_origin);
+    let token = s.api_token.clone();
+    let r = s.request("GET", &url, None, token.as_deref(), 20 * 1024 * 1024)?;
+    if r.status == 401 || r.status == 403 {
+        return Err(lx_error(format!("LearningX가 요청을 거부했습니다 (HTTP {})", r.status)));
+    }
+    if !(200..300).contains(&r.status) {
+        return Err(lx_error(format!("LearningX 요청 실패 (HTTP {})", r.status)));
+    }
+    serde_json::from_slice(&r.body).map_err(|_| lx_error("LearningX 응답이 JSON이 아닙니다"))
+}
+
+const WEEKLY_PART_CHARS: usize = 30_000;
+
+/// Keeps a JSON part small enough for the model; oversize parts are cut as text.
+fn bounded(v: Value) -> Value {
+    let text = serde_json::to_string(&v).unwrap_or_default();
+    if text.chars().count() <= WEEKLY_PART_CHARS {
+        return v;
+    }
+    let cut: String = text.chars().take(WEEKLY_PART_CHARS).collect();
+    json!({"truncated": true, "raw": cut})
+}
+
+/// Finds assignment-like items anywhere in the 주차학습 JSON. The format is not documented, so
+/// this keeps the identifying and date/status fields of every object that says it is an assignment.
+pub fn find_assignments(v: &Value) -> Vec<Value> {
+    fn is_assignment(o: &Map<String, Value>) -> bool {
+        ["type", "content_type", "item_type", "module_item_type", "category", "kind"].iter().any(|k| {
+            o.get(*k).and_then(Value::as_str).is_some_and(|t| t.to_lowercase().contains("assignment") || t.contains("과제"))
+        })
+    }
+    fn keep(k: &str) -> bool {
+        let k = k.to_lowercase();
+        ["title", "name", "id", "due", "unlock", "lock", "start", "end", "deadline", "url", "week", "complet", "status", "attend", "submit", "point", "type"].iter().any(|w| k.contains(w))
+    }
+    fn walk(v: &Value, week: Option<String>, out: &mut Vec<Value>) {
+        match v {
+            Value::Array(a) => a.iter().for_each(|x| walk(x, week.clone(), out)),
+            Value::Object(o) => {
+                // Only containers (objects that hold lists, like a week with items) name the week.
+                let container = o.values().any(Value::is_array);
+                let here = if container {
+                    ["week_title", "module_name", "section_title", "title", "name"].iter()
+                        .find_map(|k| o.get(*k).and_then(Value::as_str)).filter(|t| t.contains('주')).map(str::to_string)
+                } else { None };
+                let week = here.clone().or(week);
+                if is_assignment(o) {
+                    let mut item = Map::new();
+                    for (k, val) in o {
+                        if keep(k) && !val.is_object() && !val.is_array() {
+                            item.insert(k.clone(), val.clone());
+                        }
+                    }
+                    if let Some(w) = &week {
+                        item.insert("week".into(), json!(w));
+                    }
+                    out.push(Value::Object(item));
+                }
+                for val in o.values() {
+                    if val.is_array() || val.is_object() {
+                        walk(val, week.clone(), out);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    walk(v, None, &mut out);
+    out
 }
 
 fn str_field<'a>(o: &'a Map<String, Value>, keys: &[&str]) -> Option<&'a Value> {
@@ -482,6 +562,44 @@ impl Client {
                 return Ok(json!({"items": [], "raw": text, "note": "자료 형식을 알아보지 못해 원본 일부를 그대로 보냅니다."}));
             }
             Ok(json!({"count": items.len(), "items": items, "note": "content_id로 canvas_learningx_read(내용 읽기)를 호출할 수 있습니다."}))
+        })
+    }
+
+
+    /// LearningX 주차학습: weekly lecture items, attendance and to-dos, read-only. Opening a lecture
+    /// item would mark it as watched, so only list endpoints are called.
+    pub fn learningx_weekly(&self, course: u64) -> Result<Value> {
+        with_session(self, course, |s| {
+            let mut out = Map::new();
+            let parts: [(&str, String); 4] = [
+                ("modules", format!("courses/{course}/modules?include_detail=true")),
+                ("attendance_items", format!("courses/{course}/attendance_items/summary?only_use_attendance=true")),
+                ("lessons_attendance", format!("courses/{course}/lessons/attendances")),
+                ("todos", format!("learner/todos?course_ids[]={course}")),
+            ];
+            let mut ok = 0;
+            let mut modules = Value::Null;
+            for (key, path) in parts {
+                match api_json(s, &path) {
+                    Ok(v) => {
+                        ok += 1;
+                        if key == "modules" {
+                            modules = v.clone();
+                        }
+                        out.insert(key.into(), bounded(v));
+                    }
+                    Err(e) => {
+                        out.insert(key.into(), json!({"error": e.to_string()}));
+                    }
+                }
+            }
+            if ok == 0 {
+                return Err(lx_error("LearningX 주차학습 정보를 하나도 가져오지 못했습니다 (이 학교는 주소가 다를 수 있음)"));
+            }
+            let assignments = find_assignments(&modules);
+            out.insert("assignments_in_weeks".into(), json!(assignments));
+            out.insert("note".into(), json!("필드 이름은 학교마다 다를 수 있습니다. 항목을 열람하면 시청 완료로 기록될 수 있으므로 영상·콘텐츠 보기 주소는 열지 마세요. 과제의 상세·제출은 canvas_get_assignment 등 Canvas 도구를 쓰세요."));
+            Ok(Value::Object(out))
         })
     }
 
@@ -654,5 +772,36 @@ mod flow_tests {
         assert!(reqs[3].starts_with("post /learningx/lti/courseresource"));
         assert!(reqs[4].contains("cookie: xn_api_token=token_abcdefghijklmnop"));
         assert!(reqs[5].starts_with("get /learningx/api/v1/courses/1/resources") && reqs[5].contains("bearer token_abcdefghijklmnop"));
+    }
+
+    #[test]
+    fn reads_weekly_learning_without_opening_items() {
+        let modules = r#"[{"title":"1주차","items":[{"title":"1주차 영상","type":"video","due_at":"2026-11-08","completed":false},{"title":"1주차 과제","type":"assignment","assignment_id":55,"due_at":"2026-11-09T14:59:00Z","completed":false}]}]"#;
+        let (base, rx) = crate::canvas::tests::mock_server_with(|base| vec![
+            (200, vec![], r#"[{"id":"context_external_tool_7","label":"주차학습","type":"external"}]"#.to_string()),
+            (200, vec![], format!(r#"{{"url":"{base}/courses/1/external_tools/sessionless_launch?verifier=v1"}}"#)),
+            (200, vec![], format!(r#"<form action="{base}/learningx/lti/courseresource" method="POST" id="tool_form"><input type="hidden" name="oauth_signature" value="sig"></form>"#)),
+            (302, vec![("Location", "/learningx/app".to_string()), ("Set-Cookie", "xn_api_token=TOKEN_abcdefghijklmnop; Path=/; HttpOnly".to_string())], String::new()),
+            (200, vec![], "<html>ok</html>".to_string()),
+            (404, vec![], "{}".to_string()),
+            (200, vec![], modules.to_string()),
+            (200, vec![], modules.to_string()),
+            (200, vec![], r#"[{"title":"1주차 영상","attendance":"none"}]"#.to_string()),
+            (404, vec![], "{}".to_string()),
+            (200, vec![], r#"[{"title":"1주차 과제","completed":false}]"#.to_string()),
+        ]);
+        let client = Client::for_test(&base, "secret-canvas-token-123");
+        let out = client.learningx_weekly(1).unwrap();
+        assert_eq!(out["modules"][0]["items"][0]["title"], "1주차 영상");
+        assert_eq!(out["attendance_items"][0]["attendance"], "none");
+        assert!(out["lessons_attendance"]["error"].as_str().unwrap().contains("404"));
+        assert_eq!(out["assignments_in_weeks"].as_array().unwrap().len(), 1);
+        assert_eq!(out["assignments_in_weeks"][0]["title"], "1주차 과제");
+        assert_eq!(out["assignments_in_weeks"][0]["week"], "1주차");
+        assert_eq!(out["assignments_in_weeks"][0]["assignment_id"], 55);
+        let reqs: Vec<String> = rx.try_iter().map(|r| r.to_lowercase()).collect();
+        assert!(reqs.iter().any(|r| r.contains("/learningx/api/v1/courses/1/modules?include_detail=true")));
+        assert!(reqs.iter().any(|r| r.contains("learner/todos?course_ids[]=1")));
+        assert!(reqs.iter().all(|r| !r.contains("view_url") && !r.contains("secret-canvas-token-123") || r.contains("/courses/1/tabs") || r.contains("sessionless_launch")));
     }
 }

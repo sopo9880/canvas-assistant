@@ -82,3 +82,16 @@
 - What If Grades (developerdocs.instructure.com/services/canvas/file.all_resources/what_if_grades)
 - Planner Override (learning.flyfreely.io/doc/api/planner_override.html)
 - 전체 리소스 목록 (canvas.wisc.edu/doc/api/index.html)
+
+## LearningX 주차학습 (읽기 전용)
+
+`canvas_learningx_weekly`가 아래 목록 API만 읽습니다. 강의 항목을 열람하면 시청 완료로 기록될 수 있어 항목 보기 주소는 열지 않습니다.
+
+| 내용 | 엔드포인트 |
+|---|---|
+| 주차별 강의 항목(기한·완료) | `GET /learningx/api/v1/courses/:id/modules?include_detail=true` |
+| 항목별 출결 | `GET /learningx/api/v1/courses/:id/attendance_items/summary?only_use_attendance=true` |
+| 주차·차시별 출결 | `GET /learningx/api/v1/courses/:id/lessons/attendances` |
+| 내 할 일 | `GET /learningx/api/v1/learner/todos?course_ids[]=:id` |
+
+필드 이름은 학교마다 달라 원본 JSON을 줄여서 전달하고, `assignments_in_weeks`에 주차 안의 과제를 따로 모읍니다. 학교 화면으로 확인되지 않았습니다.

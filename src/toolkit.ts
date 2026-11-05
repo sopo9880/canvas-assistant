@@ -33,6 +33,7 @@ export const TOOLS: ToolDef[] = [
   { name: "canvas_list_files", label: "파일 검색", category: "자료", desc: "강의 파일 (최신순)", params: [course, { key: "search", label: "검색어", type: "text" }] },
   { name: "canvas_read_file", label: "파일 내용 읽기", category: "자료", desc: "PDF·PPT·Word·한글·코드 파일의 텍스트", params: [{ key: "file_id", label: "파일 ID", type: "number", required: true }] },
   { name: "canvas_learningx_resources", label: "LearningX 강의자료실", category: "자료", desc: "LearningX로 운영되는 강의자료실 목록", params: [course] },
+  { name: "canvas_learningx_weekly", label: "LearningX 주차학습", category: "자료", desc: "주차별 강의·기한·출결·할 일과 주차 안의 과제 (읽기만, 시청 처리 안 됨)", params: [course] },
   { name: "canvas_learningx_read", label: "LearningX 자료 읽기", category: "자료", desc: "LearningX 자료의 텍스트 (content_id)", params: [course, { key: "content_id", label: "content_id", type: "text", required: true }] },
   { name: "canvas_grades", label: "전체 성적", category: "성적", desc: "강의별 현재·최종 점수", params: [] },
   { name: "canvas_assignment_groups", label: "평가 비중·과제 점수", category: "성적", desc: "평가 항목 비율과 과제별 점수", params: [course] },

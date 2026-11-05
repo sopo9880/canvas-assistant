@@ -91,6 +91,7 @@ export const toolLabels: Record<string, string> = {
   make_file: "파일 만들기",
   canvas_read_submission: "내 제출물 읽기",
   canvas_learningx_resources: "LearningX 강의자료 목록",
+  canvas_learningx_weekly: "LearningX 주차학습 확인",
   canvas_learningx_read: "LearningX 자료 읽기",
   propose_submit_files: "파일 제출 요청 (승인 필요)",
   propose_submission_comment: "제출 코멘트 요청 (승인 필요)",
