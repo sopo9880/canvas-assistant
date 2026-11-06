@@ -12,6 +12,8 @@ export type Settings = {
 
 export type AppInfo = {
   version: string;
+  /** Rust std::env::consts::OS: "windows", "macos", … */
+  platform?: string;
   dataDir: string;
   hasToken: boolean;
   settings: Settings;
@@ -58,8 +60,9 @@ export const api = {
   canvasDisconnect: () => invoke<void>("canvas_disconnect"),
   canvas: <T = any>(tool: string, args: Record<string, unknown> = {}) => invoke<T>("canvas_query", { tool, args }),
   download: (fileId: string) => invoke<string>("canvas_download", { fileId: String(fileId) }),
+  lxDownload: (courseId: string, contentId: string) => invoke<string>("learningx_download", { courseId: String(courseId), contentId: String(contentId) }),
   pending: (includeDone = false) => invoke<Pending[]>("pending_list", { includeDone }),
-  decide: (id: number, approve: boolean) => invoke<any>("pending_decide", { id, approve }),
+  decide: (id: number, approve: boolean, edits?: Record<string, unknown>) => invoke<any>("pending_decide", { id, approve, edits: edits ?? null }),
   audit: () => invoke<Array<{ at: number; action: string; detail: string; ok: boolean }>>("audit_list"),
   jobs: () => invoke<Job[]>("jobs_list"),
   updateJob: (kind: string, enabled: boolean, intervalMin: number, params: Record<string, unknown>) =>
@@ -67,7 +70,8 @@ export const api = {
   runJob: (kind: string) => invoke<void>("jobs_run_now", { kind }),
   briefings: () => invoke<Array<{ id: number; at: number; text: string }>>("briefings_list"),
   codexStart: () => invoke<void>("codex_start"),
-  codexLocate: () => invoke<{ found: boolean; path?: string; viaNode?: boolean; error?: string }>("codex_locate"),
+  codexLocate: () => invoke<{ found: boolean; path?: string; viaNode?: boolean; error?: string; source?: string }>("codex_locate"),
+  diagnose: () => invoke<any>("codex_diagnose"),
   codex: <T = any>(method: string, params: Record<string, unknown> = {}) => invoke<T>("codex_call", { method, params }),
 };
 

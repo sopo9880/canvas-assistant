@@ -38,9 +38,22 @@ export function submissionLabel(state?: string, opts: { missing?: boolean; late?
   }
 }
 
+/** Did the student hand this in? Canvas reports it differently per endpoint, so check every field. */
 export function isSubmitted(a: any): boolean {
-  const s = a?.submission?.workflow_state;
-  return s === "submitted" || s === "graded" || s === "pending_review" || a?.submission?.excused === true;
+  const sub = a?.submission;
+  const s = sub?.workflow_state;
+  return s === "submitted" || s === "graded" || s === "pending_review"
+    || sub?.excused === true || sub?.submitted === true || sub?.graded === true
+    || (typeof sub?.submitted_at === "string" && sub.submitted_at !== "")
+    || a?.user_submitted === true || a?.submitted === true;
+}
+
+/** Badge text for an assignment from any endpoint. */
+export function assignmentStatus(a: any): string {
+  const sub = a?.submission ?? {};
+  if (!isSubmitted(a)) return submissionLabel(sub.workflow_state, sub) || "미제출";
+  const label = submissionLabel(sub.workflow_state, sub);
+  return label && sub.workflow_state !== "unsubmitted" ? label : "제출함";
 }
 
 export function bytes(n?: number): string {
@@ -70,8 +83,54 @@ export const toolLabels: Record<string, string> = {
   propose_discussion_reply: "토론 댓글 요청 (승인 필요)",
   propose_planner_note: "할 일 추가 요청 (승인 필요)",
   propose_calendar_event: "일정 추가 요청 (승인 필요)",
+  canvas_course_tabs: "강의 메뉴 확인",
+  canvas_course_home: "강의 홈 확인",
+  canvas_syllabus: "수업 계획서 읽기",
+  canvas_planner: "플래너 조회",
+  canvas_assignment_groups: "평가 비중 확인",
+  canvas_my_submission: "내 제출·피드백 확인",
+  canvas_discussion_thread: "게시글 읽기",
+  canvas_conversations: "메시지함 조회",
+  canvas_conversation: "메시지 읽기",
+  canvas_quizzes: "퀴즈 조회",
+  canvas_peer_reviews: "피어 리뷰 조회",
+  canvas_groups: "그룹 조회",
+  canvas_group_members: "그룹 구성원 조회",
+  canvas_course_people: "강의 사용자 조회",
+  canvas_folders: "강의자료 폴더 조회",
+  canvas_folder_files: "폴더 파일 조회",
+  canvas_api_get: "Canvas API 조회",
+  canvas_read_file: "파일 내용 읽기",
+  make_file: "파일 만들기",
+  canvas_read_submission: "내 제출물 읽기",
+  canvas_learningx_resources: "LearningX 강의자료 목록",
+  canvas_learningx_weekly: "LearningX 주차학습 확인",
+  canvas_learningx_read: "LearningX 자료 읽기",
+  propose_submit_files: "파일 제출 요청 (승인 필요)",
+  propose_submission_comment: "제출 코멘트 요청 (승인 필요)",
+  propose_planner_complete: "완료 표시 요청 (승인 필요)",
+  propose_module_item_done: "모듈 완료 요청 (승인 필요)",
+  propose_discussion_entry_reply: "답글 요청 (승인 필요)",
+  propose_discussion_mark_read: "읽음 처리 요청 (승인 필요)",
+  propose_send_message: "메시지 전송 요청 (승인 필요)",
+  propose_what_if: "성적 예측 요청 (승인 필요)",
 };
 
 export const effortLabels: Record<string, string> = {
   none: "없음", minimal: "최소", low: "낮음", medium: "보통", high: "높음", xhigh: "매우 높음", max: "최대", ultra: "울트라",
 };
+
+/** Words that differ between Windows and macOS builds. */
+export function osText(platform?: string) {
+  const mac = platform === "macos";
+  return {
+    mac,
+    name: mac ? "macOS" : "Windows",
+    vault: mac ? "macOS 키체인" : "Windows 자격 증명 관리자",
+    autostart: mac ? "로그인 시 자동 실행" : "Windows 시작 시 자동 실행",
+    tray: mac ? "메뉴 막대" : "트레이",
+    notifications: mac ? "macOS 알림" : "Windows 알림",
+    codexFile: mac ? "codex" : "codex.exe",
+    codexPlaceholder: mac ? "/Applications/…/codex" : "C:\\...\\codex.exe",
+  };
+}

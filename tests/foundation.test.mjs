@@ -49,3 +49,56 @@ test("app icons generated from the logo are committed", () => {
     assert.ok(fs.existsSync(`src-tauri/icons/${f}`), f);
   }
 });
+
+test("the installer bundles a pinned Codex and the bridge locks it down", () => {
+  const pkg = JSON.parse(read("package.json"));
+  assert.match(pkg.codexVersion, /^\d+\.\d+\.\d+$/);
+  // Code Mode tool calls spawn codex-code-mode-host from the codex binary's folder, so both ship together.
+  const win = JSON.parse(read("src-tauri/tauri.windows.conf.json")).bundle;
+  assert.deepEqual(win.targets, ["nsis"]);
+  assert.equal(win.resources["resources/codex/codex.exe"], "codex/codex.exe");
+  assert.equal(win.resources["resources/codex/codex-code-mode-host.exe"], "codex/codex-code-mode-host.exe");
+  const mac = JSON.parse(read("src-tauri/tauri.macos.conf.json")).bundle;
+  assert.ok(mac.targets.includes("dmg"));
+  assert.equal(mac.resources["resources/codex/codex"], "codex/codex");
+  assert.equal(mac.resources["resources/codex/codex-code-mode-host"], "codex/codex-code-mode-host");
+  // The shared config must not pin one platform's binaries.
+  assert.equal(JSON.parse(read("src-tauri/tauri.conf.json")).bundle.resources, undefined);
+  assert.match(read("src-tauri/Cargo.toml"), /apple-native/);
+  assert.ok(read("scripts/fetch-codex.mjs").includes("codex-code-mode-host.exe"));
+  const src = read("src-tauri/src/codex.rs");
+  for (const flag of ['cli_auth_credentials_store=\\"keyring\\"', "features.shell_tool=false", 'web_search=\\"disabled\\"', '"CODEX_HOME"']) {
+    assert.ok(src.includes(flag), flag);
+  }
+});
+
+test("links open through the validated open_external command, not a WebView permission", () => {
+  const cap = JSON.stringify(JSON.parse(read("src-tauri/capabilities/default.json")));
+  assert.ok(!cap.includes("opener:"), "the WebView gets no opener permission");
+  const lib = read("src-tauri/src/lib.rs");
+  assert.ok(lib.includes("fn open_external") && lib.includes('matches!(parsed.scheme(), "https" | "http")'));
+  assert.ok(read("src/components.tsx").includes('invoke("open_external"'));
+  for (const f of ["src/App.tsx", "src/components.tsx", "src/CodexLogin.tsx"]) {
+    assert.ok(!read(f).includes("plugin-opener"), f);
+  }
+});
+
+test("AI proposals cannot carry local file paths and user-only actions are not proposable", () => {
+  const mcp = read("src-tauri/src/mcp.rs");
+  assert.ok(mcp.includes('obj.remove("files")'));
+  assert.ok(mcp.includes('"what_if_reset" | "conversation_read"'));
+});
+
+test("the generic Canvas API tool is read-only and path-guarded", () => {
+  const ext = read("src-tauri/src/canvas_ext.rs");
+  assert.ok(ext.includes("pub fn safe_api_path") && ext.includes('p.contains("..")'));
+  const apiGet = ext.slice(ext.indexOf("pub fn api_get"), ext.indexOf("// ---------------- file upload"));
+  assert.ok(apiGet.includes("get_all") && !apiGet.includes("post_form") && !apiGet.includes("put_form"));
+});
+
+test("storage uploads never carry the Canvas token", () => {
+  const ext = read("src-tauri/src/canvas_ext.rs");
+  const upload = ext.slice(ext.indexOf("pub fn upload_file"), ext.indexOf("// ---------------- writes"));
+  const storagePost = upload.slice(upload.indexOf("storage.post"), upload.indexOf(".send(&body"));
+  assert.ok(!storagePost.includes("Authorization"));
+});

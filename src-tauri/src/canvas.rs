@@ -80,7 +80,7 @@ pub fn next_link(header: &str) -> Option<String> {
     })
 }
 
-fn same_origin(base: &str, other: &str) -> bool {
+pub(crate) fn same_origin(base: &str, other: &str) -> bool {
     match (url::Url::parse(base), url::Url::parse(other)) {
         (Ok(a), Ok(b)) => a.scheme() == b.scheme() && a.host_str() == b.host_str() && a.port_or_known_default() == b.port_or_known_default(),
         _ => false,
@@ -166,7 +166,7 @@ pub fn html_to_text(html: &str) -> String {
     cleaned.trim().to_string()
 }
 
-fn truncate(text: String, limit: usize) -> String {
+pub(crate) fn truncate(text: String, limit: usize) -> String {
     if text.chars().count() <= limit {
         return text;
     }
@@ -175,7 +175,7 @@ fn truncate(text: String, limit: usize) -> String {
     cut
 }
 
-fn pick(v: &Value, keys: &[&str]) -> Value {
+pub(crate) fn pick(v: &Value, keys: &[&str]) -> Value {
     let mut out = Map::new();
     for k in keys {
         if let Some(x) = v.get(*k) {
@@ -187,8 +187,15 @@ fn pick(v: &Value, keys: &[&str]) -> Value {
     Value::Object(out)
 }
 
-fn html_field(v: &Value, key: &str) -> Option<String> {
+pub(crate) fn html_field(v: &Value, key: &str) -> Option<String> {
     v.get(key).and_then(Value::as_str).map(|h| truncate(html_to_text(h), TEXT_LIMIT)).filter(|s| !s.is_empty())
+}
+
+/// Adds an optional `comment` (text) to a submission request.
+pub(crate) fn push_comment(fields: &mut Vec<(String, String)>, p: &Value) {
+    if let Some(c) = opt_str(p, "comment") {
+        fields.push(("comment[text_comment]".into(), c.to_string()));
+    }
 }
 
 pub fn require_id(v: &Value, key: &str) -> Result<u64> {
@@ -199,11 +206,11 @@ pub fn require_id(v: &Value, key: &str) -> Result<u64> {
     }
 }
 
-fn opt_str<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
+pub(crate) fn opt_str<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
     v.get(key).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty())
 }
 
-fn days_window(days_back: i64, days_ahead: i64) -> (String, String) {
+pub(crate) fn days_window(days_back: i64, days_ahead: i64) -> (String, String) {
     let now = chrono::Utc::now();
     let start = now - chrono::Duration::days(days_back);
     let end = now + chrono::Duration::days(days_ahead);
@@ -211,10 +218,24 @@ fn days_window(days_back: i64, days_ahead: i64) -> (String, String) {
 }
 
 pub struct Client {
-    base: String,
-    token: String,
-    agent: ureq::Agent,
-    download_agent: ureq::Agent,
+    pub(crate) base: String,
+    pub(crate) token: String,
+    pub(crate) agent: ureq::Agent,
+    pub(crate) download_agent: ureq::Agent,
+}
+
+/// True when the student has handed in the assignment (or is excused). Looks at every field
+/// Canvas uses for it, because list, to-do and upcoming endpoints each report it differently.
+pub fn is_submitted(a: &Value) -> bool {
+    let sub = a.get("submission").filter(|s| s.is_object());
+    let flag = |v: Option<&Value>| v.and_then(Value::as_bool) == Some(true);
+    let state = sub.and_then(|s| s.get("workflow_state")).and_then(Value::as_str).unwrap_or("");
+    matches!(state, "submitted" | "graded" | "pending_review")
+        || flag(sub.and_then(|s| s.get("excused")))
+        || flag(sub.and_then(|s| s.get("submitted")))
+        || flag(sub.and_then(|s| s.get("graded")))
+        || sub.and_then(|s| s.get("submitted_at")).is_some_and(|v| v.as_str().is_some_and(|t| !t.is_empty()))
+        || flag(a.get("user_submitted"))
 }
 
 impl Client {
@@ -242,7 +263,7 @@ impl Client {
 
     /// Test-only constructor that accepts a plain-http loopback server.
     #[cfg(test)]
-    fn for_test(base: &str, token: &str) -> Self {
+    pub(crate) fn for_test(base: &str, token: &str) -> Self {
         let mut c = Self::new("https://placeholder.example", token).unwrap();
         c.base = base.to_string();
         c
@@ -252,11 +273,11 @@ impl Client {
         &self.base
     }
 
-    fn url(&self, path: &str) -> String {
+    pub(crate) fn url(&self, path: &str) -> String {
         format!("{}/api/v1/{}", self.base, path.trim_start_matches('/'))
     }
 
-    fn check(status: u16, body: &str, headers_remaining: Option<&str>) -> Result<()> {
+    pub(crate) fn check(status: u16, body: &str, headers_remaining: Option<&str>) -> Result<()> {
         if (200..300).contains(&status) {
             return Ok(());
         }
@@ -269,7 +290,10 @@ impl Client {
             })
             .unwrap_or_else(|| body.chars().take(200).collect());
         Err(match status {
-            401 => CanvasError::Unauthorized,
+            // Canvas answers 401 both for a bad token and for a resource the student may not open
+            // (e.g. a course's Files menu that is turned off). Only the former means "reconnect".
+            401 if message.to_lowercase().contains("access token") || message.to_lowercase().contains("invalid") || message.is_empty() => CanvasError::Unauthorized,
+            401 => CanvasError::Forbidden(format!("이 항목은 학생에게 공개되지 않았거나 메뉴가 꺼져 있습니다 ({message})")),
             403 if body.contains("Rate Limit") || headers_remaining == Some("0") => CanvasError::RateLimited,
             403 => CanvasError::Forbidden(message),
             404 => CanvasError::NotFound,
@@ -279,7 +303,7 @@ impl Client {
     }
 
     /// Single request returning (status, link header, body). Retries once on rate limiting.
-    fn send(&self, method: &str, url: &str, form: Option<&[(String, String)]>) -> Result<(String, Option<String>)> {
+    pub(crate) fn send(&self, method: &str, url: &str, form: Option<&[(String, String)]>) -> Result<(String, Option<String>)> {
         if !same_origin(&self.base, url) {
             return Err(CanvasError::Invalid("Canvas 주소 밖으로 요청할 수 없습니다".into()));
         }
@@ -291,6 +315,7 @@ impl Client {
                     .send_form(fields.iter().map(|(k, v)| (k.as_str(), v.as_str()))),
                 ("PUT", Some(fields)) => self.agent.put(url).header("Authorization", &auth).header("Accept", "application/json")
                     .send_form(fields.iter().map(|(k, v)| (k.as_str(), v.as_str()))),
+                ("DELETE", _) => self.agent.delete(url).header("Authorization", &auth).header("Accept", "application/json").call(),
                 _ => return Err(CanvasError::Invalid("unsupported request".into())),
             };
             let mut response = response.map_err(|e| CanvasError::Network(e.to_string()))?;
@@ -383,10 +408,28 @@ impl Client {
     }
 
     fn assignment_view(a: &Value, with_description: bool) -> Value {
-        let mut out = pick(a, &["id", "course_id", "name", "due_at", "lock_at", "unlock_at", "points_possible", "submission_types", "html_url", "has_submitted_submissions", "locked_for_user", "allowed_extensions"]);
-        if let Some(s) = a.get("submission").filter(|s| s.is_object()) {
-            out["submission"] = pick(s, &["workflow_state", "submitted_at", "score", "grade", "late", "missing", "excused", "attempt"]);
+        let mut out = pick(a, &["id", "course_id", "name", "due_at", "lock_at", "unlock_at", "points_possible", "submission_types", "html_url", "has_submitted_submissions", "locked_for_user", "lock_explanation", "allowed_extensions", "allowed_attempts", "assignment_group_id", "grading_type", "is_quiz_assignment", "quiz_id", "discussion_topic", "user_submitted"]);
+        if let Some(t) = out.get("discussion_topic").and_then(|t| t.get("id")).cloned() {
+            out["discussion_topic"] = json!({"id": t});
         }
+        if with_description {
+            if let Some(r) = a.get("rubric").and_then(Value::as_array) {
+                out["rubric"] = json!(r.iter().map(|c| {
+                    let mut x = pick(c, &["description", "long_description", "points"]);
+                    if let Some(ratings) = c.get("ratings").and_then(Value::as_array) {
+                        x["ratings"] = json!(ratings.iter().map(|r| pick(r, &["description", "points"])).collect::<Vec<_>>());
+                    }
+                    x
+                }).collect::<Vec<_>>());
+            }
+        }
+        if let Some(s) = a.get("submission").filter(|s| s.is_object()) {
+            out["submission"] = pick(s, &["workflow_state", "submitted_at", "score", "grade", "late", "missing", "excused", "attempt", "submitted", "graded"]);
+        }
+        // One answer for "did I submit this?": Canvas reports it in several places depending on the
+        // endpoint (workflow_state, submitted_at, user_submitted), and external-tool submissions
+        // can leave workflow_state at "unsubmitted".
+        out["submitted"] = json!(is_submitted(&out));
         if with_description {
             if let Some(d) = html_field(a, "description") {
                 out["description"] = json!(d);
@@ -417,17 +460,35 @@ impl Client {
     pub fn upcoming(&self) -> Result<Value> {
         let todo = self.get_all("users/self/todo", &[], 100)?;
         let events = self.get_all("users/self/upcoming_events", &[], 100)?;
+        // The to-do and upcoming-event endpoints return assignments without the student's own
+        // submission, so look it up; otherwise everything already handed in shows as 미제출.
+        let mut lookups = 0;
+        let mut view = |a: &Value| -> Value {
+            let mut a = a.clone();
+            let has_submission = a.get("submission").is_some_and(Value::is_object);
+            if !has_submission && lookups < 40 {
+                if let (Some(c), Some(id)) = (a.get("course_id").and_then(Value::as_u64), a.get("id").and_then(Value::as_u64)) {
+                    lookups += 1;
+                    if let Ok(full) = self.get(&format!("courses/{c}/assignments/{id}"), &[("include[]", "submission".to_string())]) {
+                        if let Some(sub) = full.get("submission").filter(|s| s.is_object()) {
+                            a["submission"] = sub.clone();
+                        }
+                    }
+                }
+            }
+            Self::assignment_view(&a, false)
+        };
         let todo: Vec<Value> = todo.iter().map(|t| {
             let mut out = pick(t, &["type", "context_name", "course_id", "html_url"]);
             if let Some(a) = t.get("assignment") {
-                out["assignment"] = Self::assignment_view(a, false);
+                out["assignment"] = view(a);
             }
             out
         }).collect();
         let events: Vec<Value> = events.iter().map(|e| {
             let mut out = pick(e, &["id", "title", "type", "start_at", "end_at", "context_name", "context_code", "html_url", "location_name"]);
             if let Some(a) = e.get("assignment") {
-                out["assignment"] = Self::assignment_view(a, false);
+                out["assignment"] = view(a);
             }
             out
         }).collect();
@@ -591,6 +652,31 @@ impl Client {
         Ok(target)
     }
 
+    /// Fetches a file URL (Canvas file or submission attachment) into memory.
+    /// The token is only attached when the URL is on the Canvas origin; storage redirects drop it.
+    pub fn fetch_bytes(&self, url: &str, limit: u64) -> Result<Vec<u8>> {
+        if !url.starts_with("https://") && !same_origin(&self.base, url) {
+            return Err(CanvasError::Invalid("파일 주소가 올바르지 않습니다.".into()));
+        }
+        let request = self.download_agent.get(url);
+        let request = if same_origin(&self.base, url) { request.header("Authorization", &format!("Bearer {}", self.token)) } else { request };
+        let mut response = request.call().map_err(|e| CanvasError::Network(e.to_string()))?;
+        let status = response.status().as_u16();
+        if !(200..300).contains(&status) {
+            return Err(match status {
+                401 | 403 => CanvasError::Forbidden("이 파일을 내려받을 권한이 없습니다 (잠긴 파일이거나 공개 전일 수 있음)".into()),
+                404 => CanvasError::NotFound,
+                _ => CanvasError::Http(status, "파일 다운로드 실패".into()),
+            });
+        }
+        let mut buf = Vec::new();
+        response.body_mut().with_config().limit(limit + 1).reader().take(limit + 1).read_to_end(&mut buf).map_err(|e| CanvasError::Network(e.to_string()))?;
+        if buf.len() as u64 > limit {
+            return Err(CanvasError::Invalid(format!("파일이 너무 커서 ({}MB 초과) 내용을 읽을 수 없습니다. 내려받아 확인하세요.", limit >> 20)));
+        }
+        Ok(buf)
+    }
+
     // ----- write operations (only executed after explicit user approval) -----
 
     pub fn execute_write(&self, kind: &str, p: &Value) -> Result<Value> {
@@ -599,10 +685,12 @@ impl Client {
                 let course = require_id(p, "course_id")?;
                 let assignment = require_id(p, "assignment_id")?;
                 let body = opt_str(p, "body").ok_or_else(|| CanvasError::Invalid("제출 내용이 비어 있습니다".into()))?;
-                let r = self.post_form(&format!("courses/{course}/assignments/{assignment}/submissions"), &[
-                    ("submission[submission_type]".into(), "online_text_entry".into()),
-                    ("submission[body]".into(), body.into()),
-                ])?;
+                let mut fields = vec![
+                    ("submission[submission_type]".to_string(), "online_text_entry".to_string()),
+                    ("submission[body]".to_string(), body.to_string()),
+                ];
+                push_comment(&mut fields, p);
+                let r = self.post_form(&format!("courses/{course}/assignments/{assignment}/submissions"), &fields)?;
                 Ok(pick(&r, &["id", "workflow_state", "submitted_at", "attempt", "preview_url"]))
             }
             "submit_url" => {
@@ -610,10 +698,12 @@ impl Client {
                 let assignment = require_id(p, "assignment_id")?;
                 let link = opt_str(p, "url").filter(|u| u.starts_with("https://") || u.starts_with("http://"))
                     .ok_or_else(|| CanvasError::Invalid("제출할 URL이 올바르지 않습니다".into()))?;
-                let r = self.post_form(&format!("courses/{course}/assignments/{assignment}/submissions"), &[
-                    ("submission[submission_type]".into(), "online_url".into()),
-                    ("submission[url]".into(), link.into()),
-                ])?;
+                let mut fields = vec![
+                    ("submission[submission_type]".to_string(), "online_url".to_string()),
+                    ("submission[url]".to_string(), link.to_string()),
+                ];
+                push_comment(&mut fields, p);
+                let r = self.post_form(&format!("courses/{course}/assignments/{assignment}/submissions"), &fields)?;
                 Ok(pick(&r, &["id", "workflow_state", "submitted_at", "attempt"]))
             }
             "discussion_reply" => {
@@ -655,7 +745,7 @@ impl Client {
                 let r = self.post_form("calendar_events", &fields)?;
                 Ok(pick(&r, &["id", "title", "start_at", "end_at", "html_url"]))
             }
-            _ => Err(CanvasError::Invalid("지원하지 않는 작업입니다".into())),
+            other => self.execute_write_ext(other, p),
         }
     }
 }
@@ -674,15 +764,52 @@ pub fn describe_write(kind: &str, p: &Value) -> String {
         "discussion_reply" => format!("토론 댓글 작성 — {course} / {}", named("_topic_title", "topic_id", "토론")),
         "planner_note" => format!("Canvas 할 일 추가 — {}", s("title")),
         "calendar_event" => format!("개인 캘린더 일정 추가 — {}", s("title")),
-        _ => format!("알 수 없는 작업: {kind}"),
+        _ => crate::canvas_ext::describe_write_ext(kind, p).unwrap_or_else(|| format!("알 수 없는 작업: {kind}")),
     }
 }
 
-pub const WRITE_KINDS: &[&str] = &["submit_text", "submit_url", "discussion_reply", "planner_note", "calendar_event"];
+pub const WRITE_KINDS: &[&str] = &[
+    "submit_text", "submit_url", "submit_files", "submission_comment", "discussion_reply", "discussion_entry_reply",
+    "discussion_mark_read", "planner_note", "planner_complete", "calendar_event", "module_item_done", "module_item_read",
+    "send_message", "conversation_reply", "what_if", "what_if_reset", "conversation_read",
+];
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn submitted_assignments_are_not_shown_as_unsubmitted() {
+        use serde_json::json;
+        // list endpoint
+        assert!(is_submitted(&json!({"submission": {"workflow_state": "submitted"}})));
+        // external-tool / LTI submission: Canvas leaves workflow_state at unsubmitted but has a time
+        assert!(is_submitted(&json!({"submission": {"workflow_state": "unsubmitted", "submitted_at": "2026-11-05T01:00:00Z"}})));
+        // upcoming events report a plain flag
+        assert!(is_submitted(&json!({"user_submitted": true})));
+        // planner
+        assert!(is_submitted(&json!({"submission": {"submitted": true}})));
+        assert!(is_submitted(&json!({"submission": {"workflow_state": "unsubmitted", "excused": true}})));
+        assert!(!is_submitted(&json!({"submission": {"workflow_state": "unsubmitted", "submitted_at": null}})));
+        assert!(!is_submitted(&json!({"submission": {"workflow_state": "unsubmitted"}})));
+        assert!(!is_submitted(&json!({"id": 1})));
+    }
+
+    #[test]
+    fn upcoming_looks_up_my_submission() {
+        let (base, rx) = mock_server_with(|_| vec![
+            (200, vec![], "[]".to_string()),
+            (200, vec![], r#"[{"id":"assignment_9","title":"보고서","type":"assignment","context_name":"열전달","assignment":{"id":9,"course_id":3,"name":"보고서","due_at":"2026-11-08T14:59:00Z"}}]"#.to_string()),
+            (200, vec![], r#"{"id":9,"course_id":3,"name":"보고서","submission":{"workflow_state":"submitted","submitted_at":"2026-11-05T01:00:00Z","attempt":1}}"#.to_string()),
+        ]);
+        let client = Client::for_test(&base, "tok");
+        let up = client.upcoming().unwrap();
+        let a = &up["upcoming_events"][0]["assignment"];
+        assert_eq!(a["submitted"], true);
+        assert_eq!(a["submission"]["workflow_state"], "submitted");
+        let reqs: Vec<String> = rx.try_iter().collect();
+        assert!(reqs.iter().any(|r| r.to_lowercase().contains("courses/3/assignments/9") && r.contains("include")));
+    }
 
     #[test]
     fn normalizes_base_urls() {
@@ -724,10 +851,16 @@ mod tests {
     }
 
     /// Minimal HTTP/1.1 server answering scripted responses on loopback.
-    fn mock_server(responses: Vec<(u16, Vec<(&'static str, String)>, String)>) -> (String, std::sync::mpsc::Receiver<String>) {
+    pub(crate) fn mock_server(responses: Vec<(u16, Vec<(&'static str, String)>, String)>) -> (String, std::sync::mpsc::Receiver<String>) {
+        mock_server_with(move |_| responses)
+    }
+
+    /// Like `mock_server`, but the script can refer to the server's own base URL.
+    pub(crate) fn mock_server_with(script: impl FnOnce(&str) -> Vec<(u16, Vec<(&'static str, String)>, String)>) -> (String, std::sync::mpsc::Receiver<String>) {
         use std::io::{BufRead, BufReader, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let responses = script(&base);
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             for (status, headers, body) in responses {

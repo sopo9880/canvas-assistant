@@ -1,7 +1,6 @@
 name: Release
-# Builds the Windows installer on a GitHub Windows runner and publishes a release.
-# Manual only while the repository is private. Releases can also be built on Linux
-# with scripts/build-windows-on-linux.sh and uploaded with `gh release create`.
+# Builds the Windows installer and the macOS apps (Apple Silicon + Intel) and publishes them
+# as one GitHub release. Manual only while the repository is private (macOS minutes count 10x).
 on:
   workflow_dispatch:
     inputs:
@@ -9,13 +8,23 @@ on:
         description: "Mark as pre-release"
         type: boolean
         default: true
+      draft:
+        description: "Create as draft (publish it yourself from the Releases page)"
+        type: boolean
+        default: false
+      platforms:
+        description: "Which builds"
+        type: choice
+        default: all
+        options: [all, windows, macos]
 permissions:
   contents: write
 concurrency:
   group: release
   cancel-in-progress: false
 jobs:
-  release:
+  windows:
+    if: inputs.platforms != 'macos'
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
@@ -29,26 +38,97 @@ jobs:
         with:
           workspaces: src-tauri
       - run: npm ci --no-audit --no-fund
+      - run: node scripts/fetch-codex.mjs --target win32-x64
       - run: npm test
       - run: npx tauri build --bundles nsis
-      - name: Collect installer and checksums
-        shell: pwsh
-        run: |
-          $ver = node -p "require('./package.json').version"
-          New-Item -ItemType Directory -Force release | Out-Null
-          $src = Get-ChildItem src-tauri/target/release/bundle/nsis -Filter *-setup.exe | Select-Object -First 1
-          $dst = "release/CanvasAssistant-$ver-x64-setup.exe"
-          Copy-Item $src.FullName $dst
-          Get-ChildItem release -File -Filter *.exe | ForEach-Object {
-            "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)"
-          } | Out-File -Encoding ascii release/SHA256SUMS.txt
-          Get-Content release/SHA256SUMS.txt
-      - name: Publish release
+      - name: Collect installer
         shell: bash
+        run: |
+          VER=$(node -p "require('./package.json').version")
+          mkdir -p out
+          cp "$(ls src-tauri/target/release/bundle/nsis/*-setup.exe | head -1)" "out/CanvasAssistant-$VER-windows-x64-setup.exe"
+          ls -la out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: out/*
+          if-no-files-found: error
+
+  macos:
+    if: inputs.platforms != 'windows'
+    runs-on: macos-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            target: aarch64-apple-darwin
+            codex: darwin-arm64
+          - arch: x64
+            target: x86_64-apple-darwin
+            codex: darwin-x64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}
+      - run: npm ci --no-audit --no-fund
+      - run: node scripts/fetch-codex.mjs --target ${{ matrix.codex }}
+      - run: npm test
+      - name: Build app and dmg (ad-hoc signed, not notarized)
+        run: npx tauri build --target ${{ matrix.target }} --bundles app,dmg --ci
+      - name: Check the bundled Codex
+        run: |
+          APP=$(ls -d src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app | head -1)
+          ls -la "$APP/Contents/Resources/codex"
+          test -x "$APP/Contents/Resources/codex/codex"
+          test -x "$APP/Contents/Resources/codex/codex-code-mode-host"
+          file "$APP/Contents/MacOS/"* "$APP/Contents/Resources/codex/codex"
+          codesign -dv "$APP" 2>&1 | head -5 || true
+      - name: Collect dmg
+        run: |
+          VER=$(node -p "require('./package.json').version")
+          mkdir -p out
+          cp "$(ls src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg | head -1)" "out/CanvasAssistant-$VER-macos-${{ matrix.arch }}.dmg"
+          ls -la out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: out/*
+          if-no-files-found: error
+
+  publish:
+    needs: [windows, macos]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cd dist && ls -la && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           VER="v$(node -p "require('./package.json').version")"
           FLAGS=""
-          if [ "${{ inputs.prerelease }}" = "true" ] || [[ "$VER" == *-* ]]; then FLAGS="--prerelease"; fi
-          gh release create "$VER" release/* --target "$GITHUB_SHA" --title "Canvas Assistant $VER" --notes-file RELEASE_NOTES.md $FLAGS
+          if [ "${{ inputs.prerelease }}" = "true" ] || [[ "$VER" == *-* ]]; then FLAGS="$FLAGS --prerelease"; fi
+          if [ "${{ inputs.draft }}" = "true" ]; then FLAGS="$FLAGS --draft"; fi
+          if gh release view "$VER" >/dev/null 2>&1; then
+            gh release upload "$VER" dist/* --clobber
+          else
+            gh release create "$VER" dist/* --target "$GITHUB_SHA" --title "Canvas Assistant $VER" --notes-file RELEASE_NOTES.md $FLAGS
+          fi
