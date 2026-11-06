@@ -31,8 +31,7 @@ fn local_label(t: chrono::DateTime<chrono::Utc>) -> String {
 }
 
 fn is_submitted(a: &Value) -> bool {
-    let state = a.pointer("/submission/workflow_state").and_then(Value::as_str).unwrap_or("");
-    matches!(state, "submitted" | "graded" | "pending_review") || a.pointer("/submission/excused").and_then(Value::as_bool) == Some(true)
+    canvas::is_submitted(a)
 }
 
 /// Collects (assignment, course name) pairs with due dates from to-do and upcoming events.

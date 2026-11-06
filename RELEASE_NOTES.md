@@ -1,4 +1,19 @@
-## Canvas Assistant v0.3.0 (시험판)
+## Canvas Assistant v0.3.1
+
+### 고친 점
+- **이미 낸 과제가 '미제출'로 보이던 문제**: 대시보드의 '다가오는 과제'와 마감 알림이 쓰는 Canvas 목록에는 내 제출 정보가 들어 있지 않아, 낸 과제도 미제출로 표시되고 마감 알림이 오기도 했습니다. 이제 해당 과제의 내 제출 상태를 따로 확인해 표시합니다.
+- 제출 여부를 한 기준으로 판단합니다. `제출됨` 상태뿐 아니라 제출 시각, `user_submitted`, 플래너의 제출 표시도 인정하므로, 외부 도구로 낸 과제처럼 상태가 '미제출'로 남아 있어도 제출 시각이 있으면 **제출함**으로 보입니다. 과제 목록, 과제 상세, 제출 창, 마감 알림, AI 답변이 모두 같은 기준을 씁니다.
+- AI가 과제 도구 결과의 `submitted` 값을 기준으로 제출 여부를 말합니다.
+
+### 새 기능
+- **LearningX 주차학습 읽기**: AI가 주차별 강의 항목(기한·완료), 출결, 내 할 일, 주차 안에 들어 있는 과제를 읽어 "이번 주 들을 강의", "안 들은 강의", "출석 현황"을 정리합니다. 읽기만 하며 강의 항목을 열지 않아 시청 처리되지 않습니다. 학교마다 응답 형식이 달라 일부 항목은 비어 있을 수 있습니다.
+
+### 알려진 한계
+- 제출 상태가 Canvas에 기록되지 않는 제출 방식(예: 오프라인 제출, 일부 외부 도구)은 앱도 알 수 없습니다. 이때는 Canvas에서 직접 확인하세요.
+
+---
+
+## Canvas Assistant v0.3.0
 
 ### 새 기능
 - **macOS 지원**: Apple Silicon(M1~M4)용과 Intel Mac용 앱을 함께 배포합니다. Canvas 토큰과 ChatGPT 로그인은 macOS 키체인에 저장되고, Dock 아이콘을 누르면 숨긴 창이 다시 열립니다.
@@ -33,9 +48,9 @@
 
 
 ### 받기
-- **Windows**: `CanvasAssistant-0.3.0-windows-x64-setup.exe` (기존 버전 위에 설치)
-- **macOS (Apple Silicon)**: `CanvasAssistant-0.3.0-macos-arm64.dmg`
-- **macOS (Intel)**: `CanvasAssistant-0.3.0-macos-x64.dmg`
+- **Windows**: `CanvasAssistant-0.3.1-windows-x64-setup.exe` (기존 버전 위에 설치)
+- **macOS (Apple Silicon)**: `CanvasAssistant-0.3.1-macos-arm64.dmg`
+- **macOS (Intel)**: `CanvasAssistant-0.3.1-macos-x64.dmg`
 - `SHA256SUMS.txt`
 
 코드 서명이 없는 시험판입니다.

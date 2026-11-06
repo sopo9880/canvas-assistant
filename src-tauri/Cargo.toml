@@ -1,6 +1,6 @@
 [package]
 name = "canvas-assistant"
-version = "0.3.0"
+version = "0.3.1"
 description = "Personal Windows Canvas LMS assistant with Codex"
 authors = ["sopo9880"]
 edition = "2021"

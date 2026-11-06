@@ -3,7 +3,7 @@ import { api, errorText } from "../api";
 import { useApp } from "../App";
 import { Badge, Banner, Empty, Markdown, open, Spinner } from "../components";
 import { canvasAction, CanvasRef, Due, useLoad } from "../shared";
-import { bytes, formatDate, isSubmitted, submissionLabel } from "../util";
+import { assignmentStatus, bytes, formatDate, isSubmitted } from "../util";
 import type { Course } from "./CourseView";
 
 type P = { course: Course };
@@ -301,7 +301,7 @@ function AssignmentRow({ a, course, onContext, onClick }: { a: any; course: Cour
       <div className="right">
         <Due iso={a.due_at} />
         <span className="row">
-          <Badge tone={isSubmitted(a) ? "ok" : "neutral"}>{submissionLabel(a.submission?.workflow_state, a.submission ?? {}) || "—"}</Badge>
+          <Badge tone={isSubmitted(a) ? "ok" : "neutral"}>{assignmentStatus(a)}</Badge>
           {a.submission?.score != null && <Badge tone="accent">{a.submission.score}점</Badge>}
         </span>
       </div>
@@ -375,7 +375,7 @@ function AssignmentDetail({ course, a, onClose }: P & { a: any; onClose: () => v
       <Loading r={mine}>{(m) => (
         <>
           <div className="row wrap">
-            <Badge tone={m.workflow_state === "unsubmitted" ? "neutral" : "ok"}>{submissionLabel(m.workflow_state, m)}</Badge>
+            <Badge tone={isSubmitted({ submission: m }) ? "ok" : "neutral"}>{assignmentStatus({ submission: m })}</Badge>
             {m.attempt > 0 && <Badge>{m.attempt}번째 제출</Badge>}
             {m.score != null && <Badge tone="accent">{m.score}점</Badge>}
             {m.submitted_at && <span className="muted small">{formatDate(m.submitted_at)}</span>}
@@ -383,7 +383,7 @@ function AssignmentDetail({ course, a, onClose }: P & { a: any; onClose: () => v
           {m.attachments?.length > 0 && <p className="small">📎 {m.attachments.map((f: any) => f.display_name).join(", ")}</p>}
           {m.url && <p className="small break">🔗 {m.url}</p>}
           {m.history?.length > 1 && <p className="muted small">제출 이력: {m.history.map((h: any) => `${h.attempt ?? "-"}차 ${formatDate(h.submitted_at)}${h.score != null ? ` (${h.score}점)` : ""}`).join(" · ")}</p>}
-          {m.workflow_state !== "unsubmitted" && <SubmissionContent course={course} assignmentId={String(a.id)} attempts={(m.history ?? []).map((h: any) => h.attempt).filter((x: any) => x != null)} aRef={r} />}
+          {isSubmitted({ submission: m }) && <SubmissionContent course={course} assignmentId={String(a.id)} attempts={(m.history ?? []).map((h: any) => h.attempt).filter((x: any) => x != null)} aRef={r} />}
           {(m.comments ?? []).length > 0 && (
             <div className="comments">{m.comments.map((c: any, i: number) => (
               <div key={i} className="message"><div className="row space"><strong>{c.author_name}</strong><span className="muted small">{formatDate(c.created_at)}</span></div><p className="pre">{c.comment}</p></div>

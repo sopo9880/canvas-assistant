@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, errorText } from "./api";
 import { Badge, Banner, open, Spinner } from "./components";
 import { canvasAction, CanvasRef, Due, PickedFile, pickFiles } from "./shared";
-import { bytes, formatDate, submissionLabel } from "./util";
+import { assignmentStatus, bytes, formatDate, isSubmitted } from "./util";
 
 type Mode = "online_upload" | "online_text_entry" | "online_url";
 const modeLabel: Record<Mode, string> = { online_upload: "파일", online_text_entry: "텍스트", online_url: "웹 주소(URL)" };
@@ -86,7 +86,7 @@ export default function SubmitDialog({ target, onClose, onDone }: { target: Canv
             <div className="row wrap">
               <Due iso={a.due_at} />
               {a.points_possible != null && <Badge>{a.points_possible}점</Badge>}
-              <Badge tone={sub?.workflow_state === "unsubmitted" || !sub ? "neutral" : "ok"}>{sub ? submissionLabel(sub.workflow_state, sub) : "제출 기록 없음"}</Badge>
+              <Badge tone={sub && isSubmitted({ submission: sub }) ? "ok" : "neutral"}>{sub ? assignmentStatus({ submission: sub }) : "제출 기록 없음"}</Badge>
               <Badge tone={attemptsLeft === 0 ? "danger" : "neutral"}>{allowed > 0 ? `제출 ${attempts}/${allowed}회` : `제출 ${attempts}회 (제한 없음)`}</Badge>
               {exts && <Badge tone="warn">허용 형식: {exts.join(", ")}</Badge>}
             </div>

@@ -38,9 +38,22 @@ export function submissionLabel(state?: string, opts: { missing?: boolean; late?
   }
 }
 
+/** Did the student hand this in? Canvas reports it differently per endpoint, so check every field. */
 export function isSubmitted(a: any): boolean {
-  const s = a?.submission?.workflow_state;
-  return s === "submitted" || s === "graded" || s === "pending_review" || a?.submission?.excused === true;
+  const sub = a?.submission;
+  const s = sub?.workflow_state;
+  return s === "submitted" || s === "graded" || s === "pending_review"
+    || sub?.excused === true || sub?.submitted === true || sub?.graded === true
+    || (typeof sub?.submitted_at === "string" && sub.submitted_at !== "")
+    || a?.user_submitted === true || a?.submitted === true;
+}
+
+/** Badge text for an assignment from any endpoint. */
+export function assignmentStatus(a: any): string {
+  const sub = a?.submission ?? {};
+  if (!isSubmitted(a)) return submissionLabel(sub.workflow_state, sub) || "미제출";
+  const label = submissionLabel(sub.workflow_state, sub);
+  return label && sub.workflow_state !== "unsubmitted" ? label : "제출함";
 }
 
 export function bytes(n?: number): string {

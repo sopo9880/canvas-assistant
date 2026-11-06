@@ -4,7 +4,7 @@ import { api } from "../api";
 import { useApp } from "../App";
 import { Badge, Banner, Empty, open, Spinner } from "../components";
 import { Due, useLoad } from "../shared";
-import { formatDate, isSubmitted, submissionLabel } from "../util";
+import { assignmentStatus, formatDate, isSubmitted } from "../util";
 import CourseView, { Course } from "./CourseView";
 
 export default function CanvasView() {
@@ -80,7 +80,7 @@ function Dashboard({ onCourse }: { onCourse: (c: Course) => void }) {
                   </div>
                   <div className="right">
                     <Due iso={a.due_at} />
-                    {isSubmitted(a) ? <Badge tone="ok">{submissionLabel(a.submission?.workflow_state)}</Badge> : <Badge tone="neutral">미제출</Badge>}
+                    <Badge tone={isSubmitted(a) ? "ok" : "neutral"}>{assignmentStatus(a)}</Badge>
                   </div>
                 </li>
               ))}

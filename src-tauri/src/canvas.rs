@@ -224,6 +224,20 @@ pub struct Client {
     pub(crate) download_agent: ureq::Agent,
 }
 
+/// True when the student has handed in the assignment (or is excused). Looks at every field
+/// Canvas uses for it, because list, to-do and upcoming endpoints each report it differently.
+pub fn is_submitted(a: &Value) -> bool {
+    let sub = a.get("submission").filter(|s| s.is_object());
+    let flag = |v: Option<&Value>| v.and_then(Value::as_bool) == Some(true);
+    let state = sub.and_then(|s| s.get("workflow_state")).and_then(Value::as_str).unwrap_or("");
+    matches!(state, "submitted" | "graded" | "pending_review")
+        || flag(sub.and_then(|s| s.get("excused")))
+        || flag(sub.and_then(|s| s.get("submitted")))
+        || flag(sub.and_then(|s| s.get("graded")))
+        || sub.and_then(|s| s.get("submitted_at")).is_some_and(|v| v.as_str().is_some_and(|t| !t.is_empty()))
+        || flag(a.get("user_submitted"))
+}
+
 impl Client {
     pub fn new(base_url: &str, token: &str) -> Result<Self> {
         let base = normalize_base_url(base_url)?;
@@ -394,7 +408,7 @@ impl Client {
     }
 
     fn assignment_view(a: &Value, with_description: bool) -> Value {
-        let mut out = pick(a, &["id", "course_id", "name", "due_at", "lock_at", "unlock_at", "points_possible", "submission_types", "html_url", "has_submitted_submissions", "locked_for_user", "lock_explanation", "allowed_extensions", "allowed_attempts", "assignment_group_id", "grading_type", "is_quiz_assignment", "quiz_id", "discussion_topic"]);
+        let mut out = pick(a, &["id", "course_id", "name", "due_at", "lock_at", "unlock_at", "points_possible", "submission_types", "html_url", "has_submitted_submissions", "locked_for_user", "lock_explanation", "allowed_extensions", "allowed_attempts", "assignment_group_id", "grading_type", "is_quiz_assignment", "quiz_id", "discussion_topic", "user_submitted"]);
         if let Some(t) = out.get("discussion_topic").and_then(|t| t.get("id")).cloned() {
             out["discussion_topic"] = json!({"id": t});
         }
@@ -410,8 +424,12 @@ impl Client {
             }
         }
         if let Some(s) = a.get("submission").filter(|s| s.is_object()) {
-            out["submission"] = pick(s, &["workflow_state", "submitted_at", "score", "grade", "late", "missing", "excused", "attempt"]);
+            out["submission"] = pick(s, &["workflow_state", "submitted_at", "score", "grade", "late", "missing", "excused", "attempt", "submitted", "graded"]);
         }
+        // One answer for "did I submit this?": Canvas reports it in several places depending on the
+        // endpoint (workflow_state, submitted_at, user_submitted), and external-tool submissions
+        // can leave workflow_state at "unsubmitted".
+        out["submitted"] = json!(is_submitted(&out));
         if with_description {
             if let Some(d) = html_field(a, "description") {
                 out["description"] = json!(d);
@@ -442,17 +460,35 @@ impl Client {
     pub fn upcoming(&self) -> Result<Value> {
         let todo = self.get_all("users/self/todo", &[], 100)?;
         let events = self.get_all("users/self/upcoming_events", &[], 100)?;
+        // The to-do and upcoming-event endpoints return assignments without the student's own
+        // submission, so look it up; otherwise everything already handed in shows as 미제출.
+        let mut lookups = 0;
+        let mut view = |a: &Value| -> Value {
+            let mut a = a.clone();
+            let has_submission = a.get("submission").is_some_and(Value::is_object);
+            if !has_submission && lookups < 40 {
+                if let (Some(c), Some(id)) = (a.get("course_id").and_then(Value::as_u64), a.get("id").and_then(Value::as_u64)) {
+                    lookups += 1;
+                    if let Ok(full) = self.get(&format!("courses/{c}/assignments/{id}"), &[("include[]", "submission".to_string())]) {
+                        if let Some(sub) = full.get("submission").filter(|s| s.is_object()) {
+                            a["submission"] = sub.clone();
+                        }
+                    }
+                }
+            }
+            Self::assignment_view(&a, false)
+        };
         let todo: Vec<Value> = todo.iter().map(|t| {
             let mut out = pick(t, &["type", "context_name", "course_id", "html_url"]);
             if let Some(a) = t.get("assignment") {
-                out["assignment"] = Self::assignment_view(a, false);
+                out["assignment"] = view(a);
             }
             out
         }).collect();
         let events: Vec<Value> = events.iter().map(|e| {
             let mut out = pick(e, &["id", "title", "type", "start_at", "end_at", "context_name", "context_code", "html_url", "location_name"]);
             if let Some(a) = e.get("assignment") {
-                out["assignment"] = Self::assignment_view(a, false);
+                out["assignment"] = view(a);
             }
             out
         }).collect();
@@ -741,6 +777,39 @@ pub const WRITE_KINDS: &[&str] = &[
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn submitted_assignments_are_not_shown_as_unsubmitted() {
+        use serde_json::json;
+        // list endpoint
+        assert!(is_submitted(&json!({"submission": {"workflow_state": "submitted"}})));
+        // external-tool / LTI submission: Canvas leaves workflow_state at unsubmitted but has a time
+        assert!(is_submitted(&json!({"submission": {"workflow_state": "unsubmitted", "submitted_at": "2026-11-05T01:00:00Z"}})));
+        // upcoming events report a plain flag
+        assert!(is_submitted(&json!({"user_submitted": true})));
+        // planner
+        assert!(is_submitted(&json!({"submission": {"submitted": true}})));
+        assert!(is_submitted(&json!({"submission": {"workflow_state": "unsubmitted", "excused": true}})));
+        assert!(!is_submitted(&json!({"submission": {"workflow_state": "unsubmitted", "submitted_at": null}})));
+        assert!(!is_submitted(&json!({"submission": {"workflow_state": "unsubmitted"}})));
+        assert!(!is_submitted(&json!({"id": 1})));
+    }
+
+    #[test]
+    fn upcoming_looks_up_my_submission() {
+        let (base, rx) = mock_server_with(|_| vec![
+            (200, vec![], "[]".to_string()),
+            (200, vec![], r#"[{"id":"assignment_9","title":"보고서","type":"assignment","context_name":"열전달","assignment":{"id":9,"course_id":3,"name":"보고서","due_at":"2026-11-08T14:59:00Z"}}]"#.to_string()),
+            (200, vec![], r#"{"id":9,"course_id":3,"name":"보고서","submission":{"workflow_state":"submitted","submitted_at":"2026-11-05T01:00:00Z","attempt":1}}"#.to_string()),
+        ]);
+        let client = Client::for_test(&base, "tok");
+        let up = client.upcoming().unwrap();
+        let a = &up["upcoming_events"][0]["assignment"];
+        assert_eq!(a["submitted"], true);
+        assert_eq!(a["submission"]["workflow_state"], "submitted");
+        let reqs: Vec<String> = rx.try_iter().collect();
+        assert!(reqs.iter().any(|r| r.to_lowercase().contains("courses/3/assignments/9") && r.contains("include")));
+    }
 
     #[test]
     fn normalizes_base_urls() {
