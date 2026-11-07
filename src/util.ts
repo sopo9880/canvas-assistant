@@ -44,14 +44,22 @@ export function isSubmitted(a: any): boolean {
   const s = sub?.workflow_state;
   return s === "submitted" || s === "graded" || s === "pending_review"
     || sub?.excused === true || sub?.submitted === true || sub?.graded === true
+    || (typeof sub?.attempt === "number" && sub.attempt > 0)
+    || (typeof sub?.submission_type === "string" && sub.submission_type !== "")
     || (typeof sub?.submitted_at === "string" && sub.submitted_at !== "")
     || a?.user_submitted === true || a?.submitted === true;
+}
+
+/** Canvas keeps no submission record for paper / no-submission / external-tool assignments. */
+export function submissionUnknown(a: any): boolean {
+  const types: string[] = Array.isArray(a?.submission_types) ? a.submission_types : [];
+  return types.length > 0 && types.every((t) => ["none", "on_paper", "external_tool", "not_graded"].includes(t));
 }
 
 /** Badge text for an assignment from any endpoint. */
 export function assignmentStatus(a: any): string {
   const sub = a?.submission ?? {};
-  if (!isSubmitted(a)) return submissionLabel(sub.workflow_state, sub) || "미제출";
+  if (!isSubmitted(a)) return submissionUnknown(a) ? "제출 확인 불가" : (submissionLabel(sub.workflow_state, sub) || "미제출");
   const label = submissionLabel(sub.workflow_state, sub);
   return label && sub.workflow_state !== "unsubmitted" ? label : "제출함";
 }

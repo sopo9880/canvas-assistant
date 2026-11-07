@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
+import { useEffect, useMemo, useState } from "react";
 import { api, errorText } from "../api";
 import { useApp } from "../App";
 import { Badge, Banner, Empty, Markdown, open, Spinner } from "../components";
@@ -314,6 +315,11 @@ export function Assignments({ course }: P) {
   const [bucket, setBucket] = useState("");
   const r = useLoad(() => api.canvas<any[]>("canvas_list_assignments", { course_id: course.id, bucket: bucket || undefined }), [course.id, bucket]);
   const [detail, setDetail] = useState<any>(null);
+  // A submission made in the app (or a background refresh) changes the status: reload the list.
+  useEffect(() => {
+    const un = listen("canvas-updated", () => { void r.reload(); });
+    return () => { void un.then((f) => f()); };
+  }, [r.reload]);
   return (
     <section className="card">
       <div className="row space">

@@ -30,8 +30,10 @@ fn local_label(t: chrono::DateTime<chrono::Utc>) -> String {
     t.with_timezone(&Local).format("%m/%d(%a) %H:%M").to_string()
 }
 
+/// Also true for assignments whose status Canvas cannot know (paper, external tool): no reminder
+/// is better than a wrong "not submitted" alert.
 fn is_submitted(a: &Value) -> bool {
-    canvas::is_submitted(a)
+    canvas::is_submitted(a) || canvas::submission_unknown(a)
 }
 
 /// Collects (assignment, course name) pairs with due dates from to-do and upcoming events.

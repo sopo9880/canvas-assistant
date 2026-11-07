@@ -9,6 +9,7 @@ pub mod extract;
 pub mod generate;
 pub mod learningx;
 pub mod materials;
+mod updater;
 pub mod mcp;
 pub mod scheduler;
 
@@ -25,7 +26,6 @@ use tauri::{
 use tauri_plugin_opener::OpenerExt;
 
 pub const RELEASES_URL: &str = "https://github.com/sopo9880/canvas-assistant/releases";
-const RELEASES_API: &str = "https://api.github.com/repos/sopo9880/canvas-assistant/releases?per_page=10";
 
 pub struct AppState {
     pub data_dir: PathBuf,
@@ -106,29 +106,76 @@ async fn settings_save(state: Shared<'_>, patch: Value) -> Result<config::Settin
 async fn check_update() -> Result<Value, String> {
     blocking(|| {
         let current = env!("CARGO_PKG_VERSION");
-        let agent: ureq::Agent = ureq::Agent::config_builder()
-            .http_status_as_error(false)
-            .timeout_global(Some(std::time::Duration::from_secs(15)))
-            .user_agent(concat!("CanvasAssistant/", env!("CARGO_PKG_VERSION")))
-            .build()
-            .into();
-        let mut resp = agent.get(RELEASES_API).header("Accept", "application/vnd.github+json").call().map_err(|e| e.to_string())?;
-        if resp.status().as_u16() != 200 {
+        let Some(release) = updater::latest()? else {
             // Private repository or rate limit: let the user check the page directly.
             return Ok(json!({"available": false, "current": current, "url": RELEASES_URL}));
-        }
-        let list: Value = resp.body_mut().read_json().map_err(|e| e.to_string())?;
-        let latest = list.as_array().and_then(|a| a.iter().find(|r| r.get("draft") != Some(&json!(true)))).cloned().unwrap_or(Value::Null);
-        let tag = latest.get("tag_name").and_then(Value::as_str).unwrap_or("").trim_start_matches('v').to_string();
+        };
+        let installer = updater::pick_installer(&release, std::env::consts::OS, std::env::consts::ARCH);
         Ok(json!({
             "available": true,
             "current": current,
-            "latest": tag,
-            "newer": !tag.is_empty() && version_newer(&tag, current),
-            "url": latest.get("html_url").and_then(Value::as_str).unwrap_or(RELEASES_URL),
-            "prerelease": latest.get("prerelease"),
+            "latest": release.version,
+            "newer": version_newer(&release.version, current),
+            "url": release.url,
+            "notes": release.notes.chars().take(3000).collect::<String>(),
+            "installable": installer.is_some(),
+            "installer": installer.map(|a| json!({"name": a.name, "size": a.size})),
+            "os": std::env::consts::OS,
         }))
     }).await
+}
+
+static UPDATE_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Downloads and SHA-256-verifies the installer of the newest release. The release is looked up
+/// again here, so the frontend can only ask for "the update", never name a URL or path.
+#[tauri::command]
+async fn download_update(app: AppHandle, state: Shared<'_>) -> Result<Value, String> {
+    let dir = state.data_dir.join("updates");
+    blocking(move || {
+        use std::sync::atomic::Ordering;
+        if UPDATE_BUSY.swap(true, Ordering::SeqCst) {
+            return Err("이미 내려받는 중입니다.".into());
+        }
+        let result = (|| {
+            let release = updater::latest()?.ok_or("릴리스 정보를 읽을 수 없습니다 (비공개 저장소이거나 요청 한도).")?;
+            if !version_newer(&release.version, env!("CARGO_PKG_VERSION")) {
+                return Err("이미 최신 버전입니다.".to_string());
+            }
+            let asset = updater::pick_installer(&release, std::env::consts::OS, std::env::consts::ARCH)
+                .ok_or("이 운영체제용 설치 파일이 릴리스에 없습니다.")?.clone();
+            let emitter = app.clone();
+            let path = updater::download(&release, &asset, &dir, &updater::trusted_asset_url, std::time::Duration::from_secs(1), &mut |received, total| {
+                let _ = emitter.emit("update-progress", json!({"received": received, "total": total}));
+            })?;
+            // Keep only the installer we just verified.
+            for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+                if e.path() != path {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+            Ok(json!({"version": release.version, "name": asset.name}))
+        })();
+        UPDATE_BUSY.store(false, Ordering::SeqCst);
+        result
+    }).await
+}
+
+/// Starts the installer that `download_update` verified. Windows: the setup runs in passive mode
+/// and relaunches the app, so this app exits right after starting it.
+#[tauri::command]
+async fn install_update(app: AppHandle) -> Result<Value, String> {
+    let result = blocking(|| {
+        let path = updater::verified_installer().ok_or("먼저 업데이트를 내려받으세요.")?;
+        updater::launch(&path)
+    }).await?;
+    if result.get("restart").and_then(Value::as_bool) == Some(true) {
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(800));
+            app.exit(0);
+        });
+    }
+    Ok(result)
 }
 
 /// Semver-ish comparison: 0.2.0 > 0.1.0, 0.1.0 > 0.1.0-beta.1.
@@ -331,6 +378,10 @@ async fn pending_decide(app: AppHandle, state: Shared<'_>, id: i64, approve: boo
         }
     }).await;
     let _ = app.emit("pending-changed", json!({}));
+    // An approved submission or edit changes what the dashboard and lists show.
+    if approve && out.is_ok() {
+        let _ = app.emit("canvas-updated", json!({"kind": "approval"}));
+    }
     out
 }
 
@@ -619,7 +670,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            app_info, settings_save, check_update,
+            app_info, settings_save, check_update, download_update, install_update,
             canvas_connect, canvas_disconnect, canvas_query, canvas_download,
             learningx_download,
             pending_list, pending_decide, canvas_action, pick_files, audit_list,

@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { openExternal } from "./components";
+import { Banner, openExternal } from "./components";
 import { api, AppInfo, errorText } from "./api";
 import Chat from "./views/Chat";
 import CanvasView from "./views/Canvas";
@@ -62,6 +62,7 @@ export const useApp = () => useContext(AppContext)!;
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("chat");
+  const [newVersion, setNewVersion] = useState<string | null>(null);
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [codex, setCodex] = useState<CodexStatus>({ state: "starting" });
   const [pendingCount, setPendingCount] = useState(0);
@@ -104,6 +105,12 @@ export default function App() {
       setCodex({ state: "error", error: errorText(e) });
     }
   }, [refreshAccount]);
+
+  // Look for a newer release once after start (silent when offline or the repository is private).
+  useEffect(() => {
+    const t = setTimeout(() => { void api.checkUpdate().then((u) => { if (u?.newer) setNewVersion(u.latest); }).catch(() => undefined); }, 8000);
+    return () => clearTimeout(t);
+  }, []);
 
   useEffect(() => {
     void refreshInfo();
@@ -224,6 +231,11 @@ export default function App() {
           </div>
         </aside>
         <main className="main">
+          {newVersion && tab !== "settings" && (
+            <Banner tone="info" onClose={() => setNewVersion(null)}>
+              새 버전 v{newVersion}이(가) 나왔습니다. <button className="link" onClick={() => setTab("settings")}>설정에서 업데이트</button>
+            </Banner>
+          )}
           {tab === "chat" && <Chat prefill={prefill} />}
           {tab === "canvas" && <CanvasView />}
           {tab === "messages" && <Messages />}

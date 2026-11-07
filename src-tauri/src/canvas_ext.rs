@@ -62,6 +62,26 @@ pub fn multipart_body(params: &Map<String, Value>, file_name: &str, content_type
     body
 }
 
+/// Makes a URL safe for the HTTP client. Canvas installs sometimes return upload or confirm URLs
+/// with spaces, Korean text or characters like | { } ^ that the client rejects with
+/// "http: invalid uri character". Everything the HTTP stack cannot take is percent-encoded;
+/// existing %XX escapes and URL delimiters are left alone.
+pub(crate) fn clean_url(raw: &str) -> Result<String> {
+    let parsed = url::Url::parse(raw.trim()).map_err(|_| CanvasError::Invalid("업로드 주소가 올바르지 않습니다".into()))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(CanvasError::Invalid("업로드 주소가 올바르지 않습니다".into()));
+    }
+    let mut out = String::with_capacity(parsed.as_str().len());
+    for b in parsed.as_str().bytes() {
+        if b.is_ascii_alphanumeric() || b"-._~:/?#[]@!$&'()*+,;=%".contains(&b) {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    Ok(out)
+}
+
 impl Client {
     fn put_form(&self, path: &str, fields: &[(String, String)]) -> Result<Value> {
         let (body, _) = self.send("PUT", &self.url(path), Some(fields))?;
@@ -328,6 +348,7 @@ impl Client {
         ])?;
         let upload_url = init.get("upload_url").and_then(Value::as_str).filter(|u| u.starts_with("https://") || u.starts_with("http://"))
             .ok_or_else(|| CanvasError::Invalid("Canvas가 업로드 주소를 주지 않았습니다".into()))?.to_string();
+        let upload_url = clean_url(&upload_url)?;
         let params = init.get("upload_params").and_then(Value::as_object).cloned().unwrap_or_default();
         // Step 2: send the bytes to the storage service — never with the access token.
         let mut data = Vec::with_capacity(meta.len() as usize);
@@ -346,7 +367,8 @@ impl Client {
             .send(&body[..])
             .map_err(|e| CanvasError::Network(e.to_string()))?;
         let status = resp.status().as_u16();
-        let location = resp.headers().get("location").and_then(|h| h.to_str().ok()).map(str::to_string);
+        // Read the raw bytes: a Location with Korean text is not "visible ASCII" for to_str().
+        let location = resp.headers().get("location").map(|h| String::from_utf8_lossy(h.as_bytes()).into_owned());
         let text = resp.body_mut().with_config().limit(2 * 1024 * 1024).read_to_string().unwrap_or_default();
         if !(200..400).contains(&status) {
             return Err(CanvasError::Http(status, format!("{name}: 파일 업로드 실패 {}", text.chars().take(200).collect::<String>())));
@@ -358,6 +380,11 @@ impl Client {
             }
         }
         let location = location.ok_or_else(|| CanvasError::Invalid(format!("{name}: 업로드 확인 주소가 없습니다")))?;
+        // The confirm address may be relative to the storage service.
+        let location = match url::Url::parse(&upload_url).and_then(|base| base.join(location.trim())) {
+            Ok(u) => clean_url(u.as_str())?,
+            Err(_) => clean_url(&location)?,
+        };
         let confirm = if same_origin(&self.base, &location) {
             let (b, _) = self.send(if (300..400).contains(&status) { "GET" } else { "GET" }, &location, None)?;
             b
@@ -600,6 +627,35 @@ mod tests {
         assert!(reqs[3].1.contains("submission%5Bfile_ids%5D%5B%5D=55"));
         assert!(reqs[3].1.contains("comment%5Btext_comment%5D="));
         let _ = std::fs::remove_file(file);
+    }
+
+    #[test]
+    fn upload_survives_urls_with_unsafe_characters() {
+        // A space in an upload or confirm URL (file names with spaces) made the HTTP client fail with
+        // "http: invalid uri character", shown as "Canvas에 연결할 수 없습니다".
+        let file = std::env::temp_dir().join(format!("ca-upload-uri-{}.pdf", std::process::id()));
+        std::fs::write(&file, b"%PDF-1.4 hello").unwrap();
+        let (base, rx) = recording_server(vec![
+            Box::new(|b: &str| (200, vec![], format!(r#"{{"upload_url":"{b}/storage/보고서 최종.pdf?token=a|b{{c}}","upload_params":{{"key":"k1"}}}}"#))),
+            Box::new(|b: &str| (301, vec![("Location".into(), format!("{b}/api/v1/files/55/create_success?name=최종 보고서.pdf&uuid=x|y{{z}}^"))], String::new())),
+            Box::new(|_: &str| (200, vec![], r#"{"id":"55","display_name":"report.pdf"}"#.into())),
+            Box::new(|_: &str| (201, vec![], r#"{"id":"900","workflow_state":"submitted","attempt":1}"#.into())),
+        ]);
+        let client = Client::for_test(&base, "secret-token-1234567890");
+        let r = client.execute_write("submit_files", &json!({"course_id": 7, "assignment_id": 8, "files": [file.to_string_lossy()]})).unwrap();
+        assert_eq!(r["workflow_state"], "submitted");
+        let reqs: Vec<(String, String)> = rx.try_iter().collect();
+        assert_eq!(reqs.len(), 4);
+        assert!(reqs[1].0.starts_with("POST /storage/"), "{}", reqs[1].0);
+        assert!(reqs[2].0.starts_with("GET /api/v1/files/55/create_success"), "{}", reqs[2].0);
+        let _ = std::fs::remove_file(file);
+    }
+
+    #[test]
+    fn clean_url_encodes_only_what_http_rejects() {
+        assert_eq!(clean_url("https://a.kr/f/보고서 1.pdf?x=a|b").unwrap(), "https://a.kr/f/%EB%B3%B4%EA%B3%A0%EC%84%9C%201.pdf?x=a%7Cb");
+        assert_eq!(clean_url("https://a.kr/api/v1/x?include[]=a&b=%ED%95%9C").unwrap(), "https://a.kr/api/v1/x?include[]=a&b=%ED%95%9C");
+        assert!(clean_url("not a url").is_err());
     }
 
     #[test]

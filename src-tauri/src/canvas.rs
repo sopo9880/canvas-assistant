@@ -236,6 +236,15 @@ pub fn is_submitted(a: &Value) -> bool {
         || flag(sub.and_then(|s| s.get("graded")))
         || sub.and_then(|s| s.get("submitted_at")).is_some_and(|v| v.as_str().is_some_and(|t| !t.is_empty()))
         || flag(a.get("user_submitted"))
+        || sub.and_then(|s| s.get("attempt")).and_then(Value::as_u64).is_some_and(|n| n > 0)
+        || sub.and_then(|s| s.get("submission_type")).and_then(Value::as_str).is_some_and(|t| !t.is_empty())
+}
+
+/// Assignments Canvas cannot tell us the status of: paper/no-submission types and external tools
+/// (e.g. LearningX) only record a submission when the tool reports it back.
+pub fn submission_unknown(a: &Value) -> bool {
+    let types: Vec<&str> = a.get("submission_types").and_then(Value::as_array).map(|t| t.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+    !types.is_empty() && types.iter().all(|t| matches!(*t, "none" | "on_paper" | "external_tool" | "not_graded"))
 }
 
 impl Client {
@@ -307,6 +316,8 @@ impl Client {
         if !same_origin(&self.base, url) {
             return Err(CanvasError::Invalid("Canvas 주소 밖으로 요청할 수 없습니다".into()));
         }
+        let cleaned = crate::canvas_ext::clean_url(url)?;
+        let url = cleaned.as_str();
         for attempt in 0..2 {
             let auth = format!("Bearer {}", self.token);
             let response = match (method, form) {
@@ -424,12 +435,15 @@ impl Client {
             }
         }
         if let Some(s) = a.get("submission").filter(|s| s.is_object()) {
-            out["submission"] = pick(s, &["workflow_state", "submitted_at", "score", "grade", "late", "missing", "excused", "attempt", "submitted", "graded"]);
+            out["submission"] = pick(s, &["workflow_state", "submitted_at", "score", "grade", "late", "missing", "excused", "attempt", "submitted", "graded", "submission_type"]);
         }
         // One answer for "did I submit this?": Canvas reports it in several places depending on the
         // endpoint (workflow_state, submitted_at, user_submitted), and external-tool submissions
         // can leave workflow_state at "unsubmitted".
-        out["submitted"] = json!(is_submitted(&out));
+        out["submitted"] = if is_submitted(&out) { json!(true) } else if submission_unknown(&out) { Value::Null } else { json!(false) };
+        if out["submitted"].is_null() {
+            out["submission_note"] = json!("이 과제는 Canvas에 제출 기록이 남지 않는 방식(오프라인·외부 도구 등)이라 제출 여부를 알 수 없습니다. 미제출이라고 단정하지 마세요.");
+        }
         if with_description {
             if let Some(d) = html_field(a, "description") {
                 out["description"] = json!(d);
@@ -793,6 +807,24 @@ pub(crate) mod tests {
         assert!(!is_submitted(&json!({"submission": {"workflow_state": "unsubmitted", "submitted_at": null}})));
         assert!(!is_submitted(&json!({"submission": {"workflow_state": "unsubmitted"}})));
         assert!(!is_submitted(&json!({"id": 1})));
+        // an attempt number or submission type is proof too
+        assert!(is_submitted(&json!({"submission": {"workflow_state": "unsubmitted", "attempt": 1}})));
+        assert!(is_submitted(&json!({"submission": {"workflow_state": "unsubmitted", "submission_type": "online_upload"}})));
+        assert!(!is_submitted(&json!({"submission": {"workflow_state": "unsubmitted", "attempt": 0}})));
+    }
+
+    #[test]
+    fn external_tool_assignments_are_unknown_not_unsubmitted() {
+        use serde_json::json;
+        assert!(submission_unknown(&json!({"submission_types": ["external_tool"]})));
+        assert!(submission_unknown(&json!({"submission_types": ["on_paper"]})));
+        assert!(!submission_unknown(&json!({"submission_types": ["online_upload", "external_tool"]})));
+        assert!(!submission_unknown(&json!({"submission_types": ["online_upload"]})));
+        let v = Client::assignment_view(&json!({"id": 1, "name": "과제", "submission_types": ["external_tool"], "submission": {"workflow_state": "unsubmitted"}}), false);
+        assert!(v["submitted"].is_null());
+        assert!(v["submission_note"].as_str().unwrap().contains("알 수 없습니다"));
+        let v = Client::assignment_view(&json!({"id": 1, "name": "과제", "submission_types": ["online_upload"], "submission": {"workflow_state": "unsubmitted"}}), false);
+        assert_eq!(v["submitted"], false);
     }
 
     #[test]

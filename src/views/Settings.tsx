@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { api, errorText } from "../api";
 import { useApp } from "../App";
 import { Banner, open, Spinner, Toggle } from "../components";
 import CodexLogin from "../CodexLogin";
-import { osText } from "../util";
+import { bytes, osText } from "../util";
 
 export default function SettingsView() {
   const { info, refreshInfo, codex, connectCodex, refreshAccount } = useApp();
@@ -20,9 +21,27 @@ export default function SettingsView() {
   const [autostart, setAutostart] = useState<boolean | null>(null);
   const [msg, setMsg] = useState<{ tone: "ok" | "error" | "info"; text: string } | null>(null);
   const [update, setUpdate] = useState<any>(null);
+  // Installer download: idle → downloading → ready (verified, waiting for the user to click install).
+  const [dl, setDl] = useState<{ phase: "idle" | "downloading" | "ready" | "installing"; received: number; total: number; error?: string; note?: string }>({ phase: "idle", received: 0, total: 0 });
   const [diag, setDiag] = useState<any>(null);
 
   useEffect(() => { setBaseUrl(s?.canvasBaseUrl ?? ""); setCodexPath(s?.codexPath ?? ""); }, [s?.canvasBaseUrl, s?.codexPath]);
+  useEffect(() => {
+    const un = listen<{ received: number; total: number }>("update-progress", (e) => setDl((d) => d.phase === "downloading" ? { ...d, received: e.payload.received, total: e.payload.total } : d));
+    return () => { void un.then((f) => f()); };
+  }, []);
+  const downloadUpdate = async () => {
+    setDl({ phase: "downloading", received: 0, total: update?.installer?.size ?? 0 });
+    try { await api.downloadUpdate(); setDl((d) => ({ ...d, phase: "ready", received: d.total })); }
+    catch (e) { setDl({ phase: "idle", received: 0, total: 0, error: errorText(e) }); }
+  };
+  const installUpdate = async () => {
+    setDl((d) => ({ ...d, phase: "installing", error: undefined }));
+    try {
+      const r = await api.installUpdate();
+      setDl((d) => ({ ...d, phase: "ready", note: r?.restart ? "설치를 시작했습니다. 앱이 곧 닫히고 설치 후 다시 열립니다." : (r?.note ?? "설치 파일을 열었습니다.") }));
+    } catch (e) { setDl((d) => ({ ...d, phase: "ready", error: errorText(e) })); }
+  };
   useEffect(() => {
     void isEnabled().then(setAutostart).catch(() => setAutostart(false));
     void api.codexLocate().then(setLocated).catch(() => {});
@@ -184,7 +203,26 @@ export default function SettingsView() {
           {update && (update.loading ? <Spinner label="확인 중…" /> : update.error ? <Banner>{update.error}</Banner> : !update.available ? (
             <Banner tone="info">자동 확인을 할 수 없습니다 (비공개 저장소). 릴리스 페이지에서 직접 확인하세요.</Banner>
           ) : update.newer ? (
-            <Banner tone="ok">새 버전 v{update.latest}이(가) 있습니다. <button className="link" onClick={() => open(update.url)}>내려받기 →</button></Banner>
+            <div className="stack">
+              <Banner tone="ok">새 버전 v{update.latest}이(가) 있습니다{update.installable ? "" : " (이 운영체제용 자동 설치 파일이 없습니다)"}. <button className="link" onClick={() => open(update.url)}>릴리스 페이지 →</button></Banner>
+              {update.installable && (
+                <div className="row">
+                  {dl.phase === "idle" && <button className="primary" onClick={() => void downloadUpdate()}>다운로드 ({bytes(update.installer?.size)})</button>}
+                  {dl.phase === "downloading" && (<>
+                    <progress value={dl.received} max={dl.total || undefined} aria-label="업데이트 다운로드" />
+                    <span className="muted small">{bytes(dl.received)} / {bytes(dl.total)} · 끊겨도 이어받습니다</span>
+                  </>)}
+                  {(dl.phase === "ready" || dl.phase === "installing") && (
+                    <button className="primary" disabled={dl.phase === "installing"} onClick={() => void installUpdate()}>
+                      {info?.platform === "windows" ? "설치하고 다시 시작" : "설치 파일 열기"}
+                    </button>
+                  )}
+                  {dl.phase === "ready" && !dl.error && !dl.note && <span className="muted small">SHA-256 검증을 마쳤습니다. 설치를 누르면 앱이 닫혔다가 새 버전으로 다시 열립니다.</span>}
+                </div>
+              )}
+              {dl.note && <Banner tone="info">{dl.note}</Banner>}
+              {dl.error && <Banner>{dl.error}</Banner>}
+            </div>
           ) : <Banner tone="ok">최신 버전입니다 (v{update.current}).</Banner>)}
         </section>
       </div>

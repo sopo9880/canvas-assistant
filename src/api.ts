@@ -56,6 +56,8 @@ export const api = {
   info: () => invoke<AppInfo>("app_info"),
   saveSettings: (patch: Partial<Settings>) => invoke<Settings>("settings_save", { patch }),
   checkUpdate: () => invoke<any>("check_update"),
+  downloadUpdate: () => invoke<any>("download_update"),
+  installUpdate: () => invoke<any>("install_update"),
   canvasConnect: (baseUrl: string, token?: string) => invoke<{ baseUrl: string; profile: any }>("canvas_connect", { baseUrl, token: token || null }),
   canvasDisconnect: () => invoke<void>("canvas_disconnect"),
   canvas: <T = any>(tool: string, args: Record<string, unknown> = {}) => invoke<T>("canvas_query", { tool, args }),

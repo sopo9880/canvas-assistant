@@ -1,3 +1,4 @@
+import { emit } from "@tauri-apps/api/event";
 import { useEffect, useMemo, useState } from "react";
 import { api, errorText } from "./api";
 import { Badge, Banner, open, Spinner } from "./components";
@@ -64,6 +65,8 @@ export default function SubmitDialog({ target, onClose, onDone }: { target: Canv
         : await canvasAction("submit_url", { ...base, url: url.trim() });
       setDone(r);
       onDone?.();
+      // Dashboard and assignment lists reload, so the assignment stops showing as 미제출.
+      void emit("canvas-updated", {}).catch(() => undefined);
     } catch (e) { setError(errorText(e)); } finally { setBusy(false); }
   }
 
