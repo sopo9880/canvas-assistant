@@ -54,7 +54,7 @@ npm test
 rm -rf "src-tauri/target/$TARGET/release/bundle" release
 npx tauri build --target "$TARGET" --bundles nsis
 
-VERSION="$(node -p "require('./package.json').version")"
+VERSION="$(node -p "const p=require('./package.json'); p.releaseVersion || p.version")"
 BUNDLE="src-tauri/target/$TARGET/release/bundle/nsis"
 mkdir -p release
 OUT="release/CanvasAssistant-$VERSION-windows-x64-setup.exe"

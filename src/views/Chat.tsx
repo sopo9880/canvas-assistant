@@ -115,7 +115,7 @@ function fileIcon(name: string) {
   return "📄";
 }
 
-export default function Chat({ prefill }: { prefill: { text: string; n: number; send?: boolean } | null }) {
+export default function Chat({ prefill, active = true }: { prefill: { text: string; n: number; send?: boolean } | null; active?: boolean }) {
   const { codex, info, refreshInfo, go, attachments, addAttachment, removeAttachment, clearAttachments } = useApp();
   const [dragging, setDragging] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
@@ -133,12 +133,20 @@ export default function Chat({ prefill }: { prefill: { text: string; n: number; 
   const [slot, setSlot] = useState<HTMLElement | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const threadRef = useRef("");
+  const activeRef = useRef(active);
+  useEffect(() => { activeRef.current = active; }, [active]);
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const ready = codex.state === "ready" && !!codex.account;
 
   useEffect(() => { setSlot(document.getElementById("sidebar-slot")); }, []);
   useEffect(() => { threadRef.current = threadId; }, [threadId]);
+  // Coming back to the chat tab: a hidden element loses its scroll position, so jump to the end.
+  useEffect(() => {
+    if (!active) return;
+    const el = scroller.current;
+    if (el && stick.current) requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
+  }, [active]);
   const pendingSend = useRef<number | null>(null);
   useEffect(() => {
     if (!prefill) return;
@@ -372,6 +380,8 @@ export default function Chat({ prefill }: { prefill: { text: string; n: number; 
     let alive = true;
     void import("@tauri-apps/api/webview").then(({ getCurrentWebview }) => getCurrentWebview().onDragDropEvent((ev) => {
       const t = ev.payload.type;
+      // Another tab is showing, or a dialog (e.g. the submit window) is open on top: not for the chat.
+      if (!activeRef.current || document.querySelector(".modal")) { setDragging(false); return; }
       if (t === "enter" || t === "over") setDragging(true);
       else if (t === "leave") setDragging(false);
       else if (t === "drop") { setDragging(false); void attachFiles(ev.payload.paths ?? []); }
@@ -427,7 +437,7 @@ export default function Chat({ prefill }: { prefill: { text: string; n: number; 
   const efforts = useMemo(() => current?.supportedReasoningEfforts?.map((e) => e.reasoningEffort) ?? [], [current]);
   const canvasReady = !!(info?.hasToken && info.settings.canvasBaseUrl);
 
-  const threadList = slot && createPortal(
+  const threadList = slot && active && createPortal(
     <div className="threads">
       <button className="new-chat" onClick={newChat}>＋ 새 대화</button>
       <div className="subhead">최근 대화</div>

@@ -63,6 +63,11 @@ export function pickFiles(extensions?: string[] | null, title?: string) {
   return invoke<PickedFile[]>("pick_files", { extensions: extensions ?? null, title: title ?? null });
 }
 
+/** Name and size of files dropped onto a window (folders are skipped and counted). */
+export function describeFiles(paths: string[]) {
+  return invoke<{ files: PickedFile[]; skipped: number }>("describe_files", { paths });
+}
+
 /** A file the user attached to a chat message (copied into the app's attachment store). */
 export type ChatFile = { id: string; name: string; size: number; image: boolean; path: string };
 export function attachPaths(paths: string[]) {

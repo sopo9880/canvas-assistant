@@ -2,7 +2,7 @@ import { emit } from "@tauri-apps/api/event";
 import { useEffect, useMemo, useState } from "react";
 import { api, errorText } from "./api";
 import { Badge, Banner, open, Spinner } from "./components";
-import { canvasAction, CanvasRef, Due, PickedFile, pickFiles } from "./shared";
+import { canvasAction, CanvasRef, describeFiles, Due, PickedFile, pickFiles } from "./shared";
 import { assignmentStatus, bytes, formatDate, isSubmitted } from "./util";
 
 type Mode = "online_upload" | "online_text_entry" | "online_url";
@@ -20,6 +20,7 @@ export default function SubmitDialog({ target, onClose, onDone }: { target: Canv
   const [comment, setComment] = useState("");
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<any>(null);
+  const [dragging, setDragging] = useState(false);
 
   useEffect(() => {
     void (async () => {
@@ -51,6 +52,33 @@ export default function SubmitDialog({ target, onClose, onDone }: { target: Canv
     (mode === "online_url" && /^https?:\/\/\S+$/i.test(url.trim()))
   );
 
+  // Files can be dragged onto the dialog (the window reports paths, not file contents).
+  const canDrop = !!a && !done && !blocked && modes.includes("online_upload");
+  useEffect(() => {
+    if (!canDrop) return;
+    let un: (() => void) | undefined;
+    let alive = true;
+    void import("@tauri-apps/api/webview").then(({ getCurrentWebview }) => getCurrentWebview().onDragDropEvent((ev) => {
+      const p = ev.payload;
+      if (p.type === "enter" || p.type === "over") setDragging(true);
+      else if (p.type === "leave") setDragging(false);
+      else if (p.type === "drop") {
+        setDragging(false);
+        void (async () => {
+          try {
+            const r = await describeFiles(p.paths ?? []);
+            if (r.files.length) {
+              setMode("online_upload");
+              setFiles((old) => [...old, ...r.files.filter((p) => !old.some((o) => o.path === p.path))]);
+            }
+            if (r.skipped > 0) setError(r.files.length ? `폴더는 제외하고 파일 ${r.files.length}개만 추가했습니다. 폴더는 zip으로 묶어서 올리세요.` : "폴더는 올릴 수 없습니다. zip으로 묶어서 올리세요.");
+          } catch (e) { setError(errorText(e)); }
+        })();
+      }
+    })).then((f) => { if (alive) un = f; else f(); }).catch(() => undefined);
+    return () => { alive = false; un?.(); setDragging(false); };
+  }, [canDrop]);
+
   async function submit() {
     if (!ready || !mode) return;
     const what = mode === "online_upload" ? `파일 ${files.length}개` : mode === "online_text_entry" ? `텍스트 ${text.trim().length}자` : url.trim();
@@ -72,7 +100,8 @@ export default function SubmitDialog({ target, onClose, onDone }: { target: Canv
 
   return (
     <div className="modal" role="dialog" aria-modal aria-label="과제 제출" onClick={busy ? undefined : onClose}>
-      <div className="modal-body wide" onClick={(e) => e.stopPropagation()}>
+      <div className={"modal-body wide" + (dragging ? " dragging" : "")} onClick={(e) => e.stopPropagation()}>
+        {dragging && <div className="drop-hint">여기에 놓으면 제출할 파일로 추가됩니다</div>}
         <h2>📤 과제 제출 — {target.label}</h2>
         {!a && !error && <Spinner label="과제 정보를 불러오는 중…" />}
         {error && <Banner onClose={() => setError("")}>{error}</Banner>}
@@ -109,7 +138,7 @@ export default function SubmitDialog({ target, onClose, onDone }: { target: Canv
                         setFiles((old) => [...old, ...picked.filter((p) => !old.some((o) => o.path === p.path))]);
                       } catch (e) { setError(errorText(e)); }
                     }}>📎 파일 선택</button>
-                    {files.length === 0 ? <p className="muted small">제출할 파일을 선택하세요. 여러 개를 고를 수 있습니다.</p> : (
+                    {files.length === 0 ? <p className="muted small">제출할 파일을 선택하거나, 이 창에 끌어다 놓으세요. 여러 개를 올릴 수 있습니다.</p> : (
                       <ul className="list compact">
                         {files.map((f) => (
                           <li key={f.path} className="list-item">

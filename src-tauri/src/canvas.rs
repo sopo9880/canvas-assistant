@@ -224,6 +224,15 @@ pub struct Client {
     pub(crate) download_agent: ureq::Agent,
 }
 
+/// Canvas ids arrive as numbers or, with the string-ids Accept header this client sends, as strings.
+pub(crate) fn id_number(v: Option<&Value>) -> Option<u64> {
+    match v? {
+        Value::Number(n) => n.as_u64(),
+        Value::String(s) => s.trim().parse().ok(),
+        _ => None,
+    }
+}
+
 /// True when the student has handed in the assignment (or is excused). Looks at every field
 /// Canvas uses for it, because list, to-do and upcoming endpoints each report it differently.
 pub fn is_submitted(a: &Value) -> bool {
@@ -481,7 +490,7 @@ impl Client {
             let mut a = a.clone();
             let has_submission = a.get("submission").is_some_and(Value::is_object);
             if !has_submission && lookups < 40 {
-                if let (Some(c), Some(id)) = (a.get("course_id").and_then(Value::as_u64), a.get("id").and_then(Value::as_u64)) {
+                if let (Some(c), Some(id)) = (id_number(a.get("course_id")), id_number(a.get("id"))) {
                     lookups += 1;
                     if let Ok(full) = self.get(&format!("courses/{c}/assignments/{id}"), &[("include[]", "submission".to_string())]) {
                         if let Some(sub) = full.get("submission").filter(|s| s.is_object()) {
@@ -825,6 +834,25 @@ pub(crate) mod tests {
         assert!(v["submission_note"].as_str().unwrap().contains("알 수 없습니다"));
         let v = Client::assignment_view(&json!({"id": 1, "name": "과제", "submission_types": ["online_upload"], "submission": {"workflow_state": "unsubmitted"}}), false);
         assert_eq!(v["submitted"], false);
+    }
+
+    #[test]
+    fn upcoming_looks_up_submission_when_ids_are_strings() {
+        // Real Canvas answers with ids as strings ("application/json+canvas-string-ids").
+        let (base, rx) = mock_server_with(|_| vec![
+            (200, vec![], "[]".to_string()),
+            (200, vec![], r#"[{"id":"assignment_9","title":"메모2","type":"assignment","context_name":"클라우드컴퓨팅","assignment":{"id":"9","course_id":"3","name":"메모2 앱 완성","due_at":"2026-11-12T14:59:00Z","submission_types":["online_upload"]}}]"#.to_string()),
+            (200, vec![], r#"{"id":"9","course_id":"3","name":"메모2 앱 완성","submission":{"workflow_state":"submitted","submitted_at":"2026-11-05T01:00:00Z","attempt":"1"}}"#.to_string()),
+        ]);
+        let client = Client::for_test(&base, "tok");
+        let up = client.upcoming().unwrap();
+        let a = &up["upcoming_events"][0]["assignment"];
+        assert_eq!(a["submitted"], true, "{a}");
+        let reqs: Vec<String> = rx.try_iter().collect();
+        assert!(reqs.iter().any(|r| r.to_lowercase().contains("courses/3/assignments/9")), "{reqs:?}");
+        assert_eq!(id_number(Some(&json!("12"))), Some(12));
+        assert_eq!(id_number(Some(&json!(12))), Some(12));
+        assert_eq!(id_number(Some(&json!("x"))), None);
     }
 
     #[test]

@@ -236,7 +236,9 @@ export default function App() {
               새 버전 v{newVersion}이(가) 나왔습니다. <button className="link" onClick={() => setTab("settings")}>설정에서 업데이트</button>
             </Banner>
           )}
-          {tab === "chat" && <Chat prefill={prefill} />}
+          {/* The chat stays mounted while another tab is open: unmounting it dropped the running
+              conversation (streamed answer, open thread, stop button) from the screen. */}
+          <div className="tab-pane" hidden={tab !== "chat"}><Chat prefill={prefill} active={tab === "chat"} /></div>
           {tab === "canvas" && <CanvasView />}
           {tab === "messages" && <Messages />}
           {tab === "approvals" && <Approvals />}

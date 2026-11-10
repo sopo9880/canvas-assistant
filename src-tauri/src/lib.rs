@@ -25,6 +25,9 @@ use tauri::{
 };
 use tauri_plugin_opener::OpenerExt;
 
+/// The version shown in the app and used by the update check. Hotfix releases have 4 parts (0.3.2.1)
+/// while Cargo/Tauri stay on 3-part semver; package.json "releaseVersion" must equal this.
+pub const APP_VERSION: &str = "0.3.2.1";
 pub const RELEASES_URL: &str = "https://github.com/sopo9880/canvas-assistant/releases";
 
 pub struct AppState {
@@ -59,7 +62,7 @@ async fn app_info(state: Shared<'_>) -> Result<Value, String> {
     blocking(move || {
         let settings = config::load(&s.data_dir);
         Ok(json!({
-            "version": env!("CARGO_PKG_VERSION"),
+            "version": APP_VERSION,
             "platform": std::env::consts::OS,
             "dataDir": s.data_dir.to_string_lossy(),
             "hasToken": config::get_token().is_some(),
@@ -105,7 +108,7 @@ async fn settings_save(state: Shared<'_>, patch: Value) -> Result<config::Settin
 #[tauri::command]
 async fn check_update() -> Result<Value, String> {
     blocking(|| {
-        let current = env!("CARGO_PKG_VERSION");
+        let current = APP_VERSION;
         let Some(release) = updater::latest()? else {
             // Private repository or rate limit: let the user check the page directly.
             return Ok(json!({"available": false, "current": current, "url": RELEASES_URL}));
@@ -139,7 +142,7 @@ async fn download_update(app: AppHandle, state: Shared<'_>) -> Result<Value, Str
         }
         let result = (|| {
             let release = updater::latest()?.ok_or("릴리스 정보를 읽을 수 없습니다 (비공개 저장소이거나 요청 한도).")?;
-            if !version_newer(&release.version, env!("CARGO_PKG_VERSION")) {
+            if !version_newer(&release.version, APP_VERSION) {
                 return Err("이미 최신 버전입니다.".to_string());
             }
             let asset = updater::pick_installer(&release, std::env::consts::OS, std::env::consts::ARCH)
@@ -427,6 +430,32 @@ async fn pick_files(app: AppHandle, extensions: Option<Vec<String>>, title: Opti
     }).await
 }
 
+/// Name and size of files dropped onto the submit dialog. Folders are skipped and counted.
+pub fn describe_paths(paths: &[String]) -> (Vec<Value>, usize) {
+    let mut files = Vec::new();
+    let mut skipped = 0;
+    for raw in paths.iter().take(50) {
+        let p = std::path::Path::new(raw);
+        match std::fs::metadata(p) {
+            Ok(m) if m.is_file() => files.push(json!({
+                "path": p.to_string_lossy(),
+                "name": p.file_name().and_then(|n| n.to_str()).unwrap_or(""),
+                "size": m.len(),
+            })),
+            _ => skipped += 1,
+        }
+    }
+    (files, skipped)
+}
+
+#[tauri::command]
+async fn describe_files(paths: Vec<String>) -> Result<Value, String> {
+    blocking(move || {
+        let (files, skipped) = describe_paths(&paths);
+        Ok(json!({"files": files, "skipped": skipped}))
+    }).await
+}
+
 #[tauri::command]
 async fn audit_list(state: Shared<'_>) -> Result<Vec<Value>, String> {
     let s = state.inner().clone();
@@ -670,7 +699,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            app_info, settings_save, check_update, download_update, install_update,
+            app_info, settings_save, check_update, download_update, install_update, describe_files,
             canvas_connect, canvas_disconnect, canvas_query, canvas_download,
             learningx_download,
             pending_list, pending_decide, canvas_action, pick_files, audit_list,
@@ -690,8 +719,23 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_edits, version_newer};
+    use super::{apply_edits, describe_paths, version_newer};
     use serde_json::json;
+
+    #[test]
+    fn dropped_paths_keep_files_and_skip_folders() {
+        let dir = std::env::temp_dir().join(format!("ca-drop-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("폴더")).unwrap();
+        let f = dir.join("보고서 최종.pdf");
+        std::fs::write(&f, b"12345").unwrap();
+        let paths = vec![f.to_string_lossy().to_string(), dir.join("폴더").to_string_lossy().to_string(), dir.join("없음.txt").to_string_lossy().to_string()];
+        let (files, skipped) = describe_paths(&paths);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0]["name"], "보고서 최종.pdf");
+        assert_eq!(files[0]["size"], 5);
+        assert_eq!(skipped, 2);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn proposal_edits_are_limited() {

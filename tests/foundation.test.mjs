@@ -12,6 +12,17 @@ test("version matches across package.json, tauri.conf.json and Cargo.toml", () =
   assert.equal(pkg, cargo);
 });
 
+test("release version (may have 4 parts) extends the bundled version and matches the app constant", () => {
+  // Cargo, Tauri and the Windows installer need 3-part semver; hotfix releases like 0.3.2.1 are
+  // named by releaseVersion (tag, file names, in-app version and update check).
+  const pkg = JSON.parse(read("package.json"));
+  const release = pkg.releaseVersion ?? pkg.version;
+  assert.match(release, /^\d+\.\d+\.\d+(\.\d+)?$/);
+  assert.ok(release === pkg.version || release.startsWith(pkg.version + "."), `${release} must extend ${pkg.version}`);
+  const constant = read("src-tauri/src/lib.rs").match(/pub const APP_VERSION: &str = "([^"]+)";/)[1];
+  assert.equal(constant, release);
+});
+
 test("window capabilities stay minimal (no shell, fs or http plugins)", () => {
   const cap = JSON.stringify(JSON.parse(read("src-tauri/capabilities/default.json")));
   for (const forbidden of ["shell:", "fs:", "http:", "dialog:", "process:"]) assert.ok(!cap.includes(forbidden), forbidden);
