@@ -52,6 +52,10 @@ mockIPC((cmd, args: any) => {
   switch (cmd) {
     case "app_info": return { version: "0.1.0", dataDir: "C:\\Users\\sopo\\AppData\\Roaming\\com.sopo9880.canvasassistant", hasToken: true, pending: 2,
       settings: { canvasBaseUrl: "https://canvas.example.ac.kr", closeToTray: true, notifications: true, codexPath: null, defaultModel: null, defaultEffort: null, canvasToolsInChat: true } };
+    case "engine_status": return { platform: "win32-x64", supported: true, installed: "0.170.0", previous: "0.165.0", pinned: "0.170.0", legacy: false, busy: false };
+    case "engine_check": return { latest: "0.171.0", installed: "0.170.0", newer: true };
+    case "engine_install": return { platform: "win32-x64", supported: true, installed: "0.171.0", previous: "0.170.0", pinned: "0.170.0", legacy: false, busy: false };
+    case "engine_rollback": return { platform: "win32-x64", supported: true, installed: "0.165.0", previous: "0.170.0", pinned: "0.170.0", legacy: false, busy: false };
     case "codex_start": return null;
     case "codex_locate": return { found: true, source: "bundled", path: "C:\\Users\\sopo\\AppData\\Local\\Canvas Assistant\\codex\\codex.exe" };
     case "codex_call": {

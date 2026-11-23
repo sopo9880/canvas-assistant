@@ -3,6 +3,7 @@ pub mod canvas;
 pub mod canvas_ext;
 pub mod codex;
 pub mod config;
+pub mod engine;
 pub mod db;
 pub mod attachments;
 pub mod extract;
@@ -27,7 +28,7 @@ use tauri_plugin_opener::OpenerExt;
 
 /// The version shown in the app and used by the update check. Hotfix releases have 4 parts (0.3.2.1)
 /// while Cargo/Tauri stay on 3-part semver; package.json "releaseVersion" must equal this.
-pub const APP_VERSION: &str = "0.3.2.1";
+pub const APP_VERSION: &str = "0.4.0";
 pub const RELEASES_URL: &str = "https://github.com/sopo9880/canvas-assistant/releases";
 
 pub struct AppState {
@@ -607,6 +608,81 @@ fn codex_locate(app: AppHandle, state: Shared<'_>) -> Value {
     }
 }
 
+// ---------------- Codex engine (downloaded and managed by the app) ----------------
+
+static ENGINE_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn engine_status_json(app: &AppHandle, data_dir: &std::path::Path) -> Value {
+    let mut v = engine::status(&engine::engine_root(data_dir));
+    let legacy = app.path().resource_dir().ok().is_some_and(|d| d.join("codex").join(if cfg!(windows) { "codex.exe" } else { "codex" }).is_file());
+    v["legacy"] = json!(legacy);
+    v["busy"] = json!(ENGINE_BUSY.load(std::sync::atomic::Ordering::SeqCst));
+    v
+}
+
+#[tauri::command]
+fn engine_status(app: AppHandle, state: Shared<'_>) -> Value {
+    engine_status_json(&app, &state.data_dir)
+}
+
+/// Looks up the newest stable Codex. Never installs anything.
+#[tauri::command]
+async fn engine_check(app: AppHandle, state: Shared<'_>) -> Result<Value, String> {
+    let data_dir = state.data_dir.clone();
+    blocking(move || {
+        let latest = engine::latest_version(engine::REGISTRY)?;
+        let status = engine_status_json(&app, &data_dir);
+        let installed = status.get("installed").and_then(Value::as_str).map(str::to_string);
+        let newer = installed.as_deref().map_or(true, |i| version_newer(&latest, i));
+        Ok(json!({"latest": latest, "installed": installed, "newer": newer}))
+    }).await
+}
+
+/// `target` is "pinned" (first install: the version this app was tested with) or "latest".
+/// The new version is downloaded, verified and probed beside the current one; only then is it
+/// switched on and the Codex connection restarted. Chats and the login are not touched.
+#[tauri::command]
+async fn engine_install(app: AppHandle, state: Shared<'_>, target: String) -> Result<Value, String> {
+    let s = state.inner().clone();
+    blocking(move || {
+        use std::sync::atomic::Ordering;
+        if ENGINE_BUSY.swap(true, Ordering::SeqCst) {
+            return Err("이미 설치 중입니다.".into());
+        }
+        let result = (|| {
+            let platform = engine::platform().ok_or("이 운영체제에서는 AI 엔진 자동 설치를 지원하지 않습니다.")?;
+            let version = match target.as_str() {
+                "pinned" => engine::PINNED.to_string(),
+                "latest" => engine::latest_version(engine::REGISTRY)?,
+                _ => return Err("알 수 없는 설치 대상입니다.".to_string()),
+            };
+            let root = engine::engine_root(&s.data_dir);
+            let emitter = app.clone();
+            let installed = engine::install(&root, engine::REGISTRY, &version, platform, &engine::trusted_tarball, std::time::Duration::from_secs(1), &|p, v| engine::probe(p, v).map(|_| ()), &mut |stage, received, total| {
+                let _ = emitter.emit("engine-progress", json!({"stage": stage, "received": received, "total": total}));
+            })?;
+            s.codex.stop();
+            engine::cleanup(&root);
+            let _ = app.emit("engine-changed", json!({"version": installed.current}));
+            Ok(engine_status_json(&app, &s.data_dir))
+        })();
+        ENGINE_BUSY.store(false, Ordering::SeqCst);
+        result
+    }).await
+}
+
+#[tauri::command]
+async fn engine_rollback(app: AppHandle, state: Shared<'_>) -> Result<Value, String> {
+    let s = state.inner().clone();
+    blocking(move || {
+        let root = engine::engine_root(&s.data_dir);
+        let st = engine::rollback(&root)?;
+        s.codex.stop();
+        let _ = app.emit("engine-changed", json!({"version": st.current}));
+        Ok(engine_status_json(&app, &s.data_dir))
+    }).await
+}
+
 // ---------------- setup ----------------
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
@@ -699,7 +775,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            app_info, settings_save, check_update, download_update, install_update, describe_files,
+            app_info, settings_save, engine_status, engine_check, engine_install, engine_rollback, check_update, download_update, install_update, describe_files,
             canvas_connect, canvas_disconnect, canvas_query, canvas_download,
             learningx_download,
             pending_list, pending_decide, canvas_action, pick_files, audit_list,

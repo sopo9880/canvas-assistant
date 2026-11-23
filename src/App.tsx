@@ -26,6 +26,17 @@ export type CodexStatus = {
   account?: { type: string; email?: string | null; planType?: string } | null;
 };
 
+export type EngineState = {
+  phase: "idle" | "installing" | "error";
+  stage: string;
+  received: number;
+  total: number;
+  error?: string;
+  target: "pinned" | "latest";
+  /** Newest stable Codex found by the background check (set only when newer than installed). */
+  latest?: string | null;
+};
+
 export type LoginState = {
   mode: "browser" | "device";
   loginId?: string;
@@ -44,6 +55,9 @@ type Ctx = {
   refreshInfo: () => Promise<void>;
   codex: CodexStatus;
   connectCodex: () => Promise<void>;
+  engine: EngineState;
+  installEngine: (target: "pinned" | "latest") => Promise<boolean>;
+  checkEngine: () => Promise<{ latest: string; installed: string | null; newer: boolean } | null>;
   refreshAccount: () => Promise<void>;
   go: (tab: Tab) => void;
   askAI: (prompt: string, opts?: { send?: boolean; refs?: CanvasRef[] }) => void;
@@ -65,6 +79,7 @@ export default function App() {
   const [newVersion, setNewVersion] = useState<string | null>(null);
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [codex, setCodex] = useState<CodexStatus>({ state: "starting" });
+  const [engine, setEngine] = useState<EngineState>({ phase: "idle", stage: "", received: 0, total: 0, target: "pinned" });
   const [pendingCount, setPendingCount] = useState(0);
   const [prefill, setPrefill] = useState<{ text: string; n: number; send?: boolean } | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -106,6 +121,53 @@ export default function App() {
     }
   }, [refreshAccount]);
 
+  const installEngine = useCallback(async (target: "pinned" | "latest") => {
+    setEngine({ phase: "installing", stage: "resolve", received: 0, total: 0, target });
+    try {
+      await api.engineInstall(target);
+      setEngine({ phase: "idle", stage: "", received: 0, total: 0, target, latest: null });
+      retries.current = 0;
+      await connectCodex();
+      return true;
+    } catch (e) {
+      setEngine({ phase: "error", stage: "", received: 0, total: 0, target, error: errorText(e) });
+      setCodex({ state: "error", error: "AI 엔진(Codex)이 준비되지 않았습니다." });
+      return false;
+    }
+  }, [connectCodex]);
+
+  const checkEngine = useCallback(async () => {
+    try {
+      const r = await api.engineCheck();
+      setEngine((e) => ({ ...e, latest: r.newer && r.installed ? r.latest : null }));
+      return r;
+    } catch { return null; }
+  }, []);
+
+  useEffect(() => {
+    const un = listen<{ stage: string; received: number; total: number }>("engine-progress", (e) => {
+      setEngine((s) => s.phase === "installing" ? { ...s, stage: e.payload.stage, received: e.payload.received, total: e.payload.total } : s);
+    });
+    return () => { void un.then((f) => f()); };
+  }, []);
+
+  // First run: Codex is not part of the installer, so it is downloaded now. Older installs that
+  // still carry a bundled copy keep using it until the user switches in Settings.
+  useEffect(() => {
+    void (async () => {
+      let needsInstall = false;
+      try {
+        const [st, i] = await Promise.all([api.engineStatus(), api.info()]);
+        needsInstall = st.supported && !st.installed && !st.legacy && !i.settings.codexPath;
+      } catch { /* fall through to a normal connect */ }
+      if (needsInstall) await installEngine("pinned");
+      else await connectCodex();
+      setTimeout(() => void checkEngine(), 15000);
+    })();
+    const t = setInterval(() => void checkEngine(), 6 * 60 * 60 * 1000);
+    return () => clearInterval(t);
+  }, [installEngine, connectCodex, checkEngine]);
+
   // Look for a newer release once after start (silent when offline or the repository is private).
   useEffect(() => {
     const t = setTimeout(() => { void api.checkUpdate().then((u) => { if (u?.newer) setNewVersion(u.latest); }).catch(() => undefined); }, 8000);
@@ -114,7 +176,6 @@ export default function App() {
 
   useEffect(() => {
     void refreshInfo();
-    void connectCodex();
     const subs = [
       listen("codex-disconnected", () => {
         setCodex({ state: "error", error: "Codex 연결이 끊어졌습니다." });
@@ -187,7 +248,7 @@ export default function App() {
   }, []);
 
   const ctx: Ctx = {
-    info, login, loginError, startLogin, cancelLogin, refreshInfo, codex, connectCodex, refreshAccount, go: setTab, askAI, pendingCount,
+    info, login, loginError, startLogin, cancelLogin, refreshInfo, codex, connectCodex, engine, installEngine, checkEngine, refreshAccount, go: setTab, askAI, pendingCount,
     attachments, recentFiles, addAttachment, removeAttachment, clearAttachments, openMenu, openSubmit: setSubmitRef,
   };
   const canvasReady = !!(info?.hasToken && info.settings.canvasBaseUrl);
@@ -231,6 +292,11 @@ export default function App() {
           </div>
         </aside>
         <main className="main">
+          {engine.latest && tab !== "settings" && (
+            <Banner tone="info">
+              AI 엔진(Codex) v{engine.latest} 업데이트가 있습니다. <button className="link" onClick={() => setTab("settings")}>설정에서 업데이트</button>
+            </Banner>
+          )}
           {newVersion && tab !== "settings" && (
             <Banner tone="info" onClose={() => setNewVersion(null)}>
               새 버전 v{newVersion}이(가) 나왔습니다. <button className="link" onClick={() => setTab("settings")}>설정에서 업데이트</button>

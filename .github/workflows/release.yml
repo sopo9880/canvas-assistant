@@ -38,7 +38,6 @@ jobs:
         with:
           workspaces: src-tauri
       - run: npm ci --no-audit --no-fund
-      - run: node scripts/fetch-codex.mjs --target win32-x64
       - run: npm test
       - run: npx tauri build --bundles nsis
       - name: Collect installer
@@ -64,10 +63,8 @@ jobs:
         include:
           - arch: arm64
             target: aarch64-apple-darwin
-            codex: darwin-arm64
           - arch: x64
             target: x86_64-apple-darwin
-            codex: darwin-x64
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -82,17 +79,14 @@ jobs:
           workspaces: src-tauri
           key: ${{ matrix.target }}
       - run: npm ci --no-audit --no-fund
-      - run: node scripts/fetch-codex.mjs --target ${{ matrix.codex }}
       - run: npm test
       - name: Build app and dmg (ad-hoc signed, not notarized)
         run: npx tauri build --target ${{ matrix.target }} --bundles app,dmg --ci
-      - name: Check the bundled Codex
+      - name: Check the app does not bundle Codex (it is downloaded on first run)
         run: |
           APP=$(ls -d src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app | head -1)
-          ls -la "$APP/Contents/Resources/codex"
-          test -x "$APP/Contents/Resources/codex/codex"
-          test -x "$APP/Contents/Resources/codex/codex-code-mode-host"
-          file "$APP/Contents/MacOS/"* "$APP/Contents/Resources/codex/codex"
+          test ! -e "$APP/Contents/Resources/codex"
+          file "$APP/Contents/MacOS/"*
           codesign -dv "$APP" 2>&1 | head -5 || true
       - name: Collect dmg
         run: |

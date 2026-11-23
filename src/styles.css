@@ -362,3 +362,7 @@ progress { flex: 1; min-width: 160px; max-width: 320px; height: 10px; accent-col
 /* Keeps the chat mounted but out of sight on other tabs without changing its layout. */
 .tab-pane { display: contents; }
 .tab-pane[hidden] { display: none; }
+
+.engine-card { margin: 14px 0; padding: 12px 14px; border: 1px solid var(--border, #e3e6ee); border-radius: 10px; display: flex; flex-direction: column; gap: 10px; }
+.engine-card h3 { margin: 0; font-size: 14px; }
+.engine-card .row { flex-wrap: wrap; gap: 8px; }

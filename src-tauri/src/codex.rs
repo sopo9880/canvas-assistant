@@ -81,8 +81,14 @@ pub enum CodexSource {
     System,
 }
 
-/// The codex.exe shipped inside the installer (resources/codex/codex.exe).
+/// The Codex this app manages itself: the active engine downloaded by `engine.rs`, or, for
+/// installs that predate in-app engine management, the copy an older installer left in the
+/// resources folder (an offline fallback until the engine is installed).
 pub fn bundled_codex(app: &AppHandle) -> Option<PathBuf> {
+    let data = app.path().app_data_dir().ok()?;
+    if let Some(p) = crate::engine::current_path(&crate::engine::engine_root(&data)) {
+        return Some(p);
+    }
     let exe = if cfg!(windows) { "codex.exe" } else { "codex" };
     app.path().resource_dir().ok().map(|d| d.join("codex").join(exe)).filter(|p| p.is_file())
 }
@@ -152,7 +158,7 @@ pub fn resolve_codex(custom: Option<&str>) -> Result<(PathBuf, Vec<String>), Str
             }
         }
     }
-    Err("앱에 포함된 Codex를 찾을 수 없습니다. 설치 파일로 앱을 다시 설치하거나, 설정 → 고급에서 codex.exe 경로를 지정하세요.".into())
+    Err("Codex(AI 엔진)가 아직 설치되지 않았습니다. 설정 → AI 엔진에서 설치하거나, 설정 → 고급에서 codex 경로를 지정하세요.".into())
 }
 
 pub fn workspace_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -452,6 +458,13 @@ impl CodexState {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
+        if let Some(tools) = crate::engine::tool_dir(&program) {
+            let mut paths = vec![tools];
+            paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()));
+            if let Ok(joined) = std::env::join_paths(paths) {
+                command.env("PATH", joined);
+            }
+        }
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;

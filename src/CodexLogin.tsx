@@ -1,3 +1,4 @@
+import { EngineProgress } from "./EngineUI";
 import { useState } from "react";
 import { useApp } from "./App";
 import { Banner, open, Spinner } from "./components";
@@ -19,9 +20,10 @@ function CopyLink({ url }: { url?: string }) {
 
 /** ChatGPT sign-in for the bundled Codex. Used on the chat screen and in Settings. */
 export default function CodexLogin({ compact = false }: { compact?: boolean }) {
-  const { codex, login, loginError, startLogin, cancelLogin, connectCodex, refreshAccount, info } = useApp();
+  const { codex, login, loginError, startLogin, cancelLogin, connectCodex, refreshAccount, info, engine } = useApp();
   const [copied, setCopied] = useState(false);
 
+  if (engine.phase !== "idle") return <EngineProgress />;
   if (codex.state === "starting") return <Spinner label="Codex 준비 중…" />;
   if (codex.state === "error") {
     return (

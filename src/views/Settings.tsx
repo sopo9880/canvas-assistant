@@ -6,6 +6,7 @@ import { api, errorText } from "../api";
 import { useApp } from "../App";
 import { Banner, open, Spinner, Toggle } from "../components";
 import CodexLogin from "../CodexLogin";
+import { EngineCard } from "../EngineUI";
 import { bytes, osText } from "../util";
 
 export default function SettingsView() {
@@ -156,19 +157,20 @@ export default function SettingsView() {
               <span>Canvas 연결</span><span>{diag.canvasConfigured ? "✓ 설정됨" : "✗ 설정 안 됨 — 위에서 Canvas 주소와 토큰을 입력하세요"}</span>
               <span>대화에서 사용</span><span>{diag.canvasToolsInChat ? "✓ 켜짐" : "✗ 꺼짐"}</span>
               <span>도구 서버</span><span>{diag.server?.status === "connected" ? `✓ 연결됨 (도구 ${diag.server.tools}개)` : `✗ ${diag.server?.status ?? "응답 없음"}${diag.server?.error ? ` — ${typeof diag.server.error === "string" ? diag.server.error : JSON.stringify(diag.server.error)}` : ""}`}</span>
-              <span>AI 도구 실행기</span><span>{diag.codeModeHost ? "✓ codex-code-mode-host 있음" : "✗ codex-code-mode-host가 Codex 옆에 없습니다 — 설치 파일을 다시 설치하세요 (AI가 부르는 도구가 모두 실패함)"}</span>
+              <span>AI 도구 실행기</span><span>{diag.codeModeHost ? "✓ codex-code-mode-host 있음" : "✗ codex-code-mode-host가 Codex 옆에 없습니다 — 위 AI 엔진 카드에서 다시 설치하세요 (AI가 부르는 도구가 모두 실패함)"}</span>
               <span>시험 호출</span><span className="break">{diag.profileCall ? (diag.profileCall.isError ? `✗ ${diag.profileCall.text}` : "✓ Canvas 프로필 조회 성공") : "—"}</span>
             </div>
           ))}
-          <p className="muted small">AI는 앱에 포함된 Codex로 읽기 전용 실행됩니다. 명령 실행, 파일 수정, 웹 검색은 꺼져 있고 Canvas 도구만 사용합니다.</p>
+          <EngineCard />
+          <p className="muted small">AI는 앱이 관리하는 Codex로 읽기 전용 실행됩니다. 명령 실행, 파일 수정, 웹 검색은 꺼져 있고 Canvas 도구만 사용합니다.</p>
           <details className="advanced">
             <summary>고급: Codex 실행 파일</summary>
             <div className="kv">
               <span>사용 중</span>
-              <span className="break">{located ? (located.found ? `${located.source === "bundled" ? "앱에 포함된 Codex" : located.source === "custom" ? "직접 지정한 경로" : "PC에 설치된 Codex"} — ${located.path}` : <span className="error-text">{located.error}</span>) : "확인 중…"}</span>
+              <span className="break">{located ? (located.found ? `${located.source === "bundled" ? "앱이 관리하는 Codex" : located.source === "custom" ? "직접 지정한 경로" : "PC에 설치된 Codex"} — ${located.path}` : <span className="error-text">{located.error}</span>) : "확인 중…"}</span>
             </div>
             <form className="form-grid" onSubmit={(e) => { e.preventDefault(); void saveCodexPath(); }}>
-              <label className="span-2">다른 {os.codexFile} 사용 (비워 두면 앱에 포함된 Codex 사용)
+              <label className="span-2">다른 {os.codexFile} 사용 (비워 두면 앱이 관리하는 Codex 사용)
                 <input value={codexPath} onChange={(e) => setCodexPath(e.target.value)} placeholder={os.codexPlaceholder} spellCheck={false} />
               </label>
               <div className="span-2 row end"><button type="submit">저장</button></div>

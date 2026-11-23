@@ -28,7 +28,7 @@ Canvas LMS와 Codex(ChatGPT)를 연결한 Windows·macOS용 개인 학습 비서
 1. Apple Silicon(M1~M4)은 `…-macos-arm64.dmg`, Intel Mac은 `…-macos-x64.dmg`를 받아 앱을 응용 프로그램 폴더로 옮깁니다.
 2. 서명·공증이 없어서 처음 열 때 막히면 **시스템 설정 → 개인정보 보호 및 보안 → 그래도 열기**를 누르세요.
 
-Codex는 앱에 포함되어 있어서 따로 설치할 필요가 없습니다.
+Codex(AI 엔진)는 설치 파일에 들어 있지 않습니다. **처음 실행할 때 앱이 공식 Codex를 자동으로 내려받아**(약 190MB, 인터넷 필요) 무결성을 검증하고 설치합니다. 업데이트는 설정 → AI 엔진에서 버튼을 눌렀을 때만 합니다.
 
 요구 사항: Windows 10/11 64비트(WebView2는 설치 프로그램이 자동 설치) 또는 macOS 11 이상, ChatGPT 계정(AI 기능), 학교 Canvas 계정.
 
@@ -41,7 +41,7 @@ Codex는 앱에 포함되어 있어서 따로 설치할 필요가 없습니다.
 ## 보안과 개인정보
 
 - Canvas 토큰은 **Windows 자격 증명 관리자**(macOS는 **키체인**)에만 저장됩니다. 설정 파일·로그·화면에 남지 않고, 토큰은 설정한 Canvas 주소로만 전송됩니다(다른 도메인으로 가는 페이지 링크나 리다이렉트에는 보내지 않음).
-- ChatGPT 로그인은 앱에 포함된 Codex가 처리하고, 로그인 정보는 자격 증명 관리자(macOS는 키체인)에 저장됩니다. Codex는 앱 전용 폴더(Windows `%APPDATA%\com.sopo9880.canvasassistant\codex`, macOS `~/Library/Application Support/com.sopo9880.canvasassistant/codex`)를 써서 PC에 따로 설치된 Codex와 섞이지 않습니다.
+- ChatGPT 로그인은 앱이 관리하는 Codex가 처리하고, 로그인 정보는 자격 증명 관리자(macOS는 키체인)에 저장됩니다. Codex는 앱 전용 폴더(Windows `%APPDATA%\com.sopo9880.canvasassistant\codex`, macOS `~/Library/Application Support/com.sopo9880.canvasassistant/codex`)를 써서 PC에 따로 설치된 Codex와 섞이지 않습니다.
 - AI는 **읽기 전용 샌드박스**에서 실행되고 셸 도구·웹 검색이 꺼져 있습니다. 명령 실행·파일 수정 요청은 항상 거절되고, AI가 쓸 수 있는 도구는 Canvas 조회, '변경 제안', 새 파일 만들기(make_file)뿐입니다. make_file은 `AI 생성` 폴더 안에만 새 파일을 만들고, 실행 파일은 만들지 않으며 기존 파일을 덮어쓰지 않습니다.
 - LearningX 연결은 Canvas의 일회용 외부 도구 실행 주소로 하고, Canvas 토큰은 LearningX·자료 서버로 보내지 않습니다. LearningX 쿠키는 메모리에만 두고 20분 뒤 버립니다.
 - Canvas를 바꾸는 작업은 모두 **승인 대기**를 거칩니다. 한 요청은 한 번만 실행됩니다.
@@ -52,6 +52,7 @@ Codex는 앱에 포함되어 있어서 따로 설치할 필요가 없습니다.
 | 경로 | 내용 |
 |---|---|
 | `src/` | React UI (대화, Canvas, 승인 대기, 자동화, 설정) |
+| `src-tauri/src/engine.rs` | Codex 내려받기·sha512 검증·호환성 검사·교체·롤백 (`<앱 데이터>/engine/<버전>/`) |
 | `src-tauri/src/codex.rs` | `codex app-server` JSON-RPC 브리지 (허용 목록, 읽기 전용 강제, Codex 실행 파일 탐색) |
 | `src-tauri/src/canvas.rs` | Canvas REST 클라이언트 (페이지네이션, 요청 한도 재시도, 토큰 출처 제한, 쓰기 작업) |
 | `src-tauri/src/canvas_ext.rs` | 강의 탭·계획서·플래너·제출 이력·토론·메시지함 등 조회, 파일 업로드 제출, 나머지 쓰기 작업 |
@@ -70,7 +71,7 @@ Codex는 앱에 포함되어 있어서 따로 설치할 필요가 없습니다.
 
 ```bash
 npm ci
-npm run fetch:codex           # 설치 파일에 넣을 codex.exe 받기 (package.json codexVersion)
+npm run fetch:codex           # (개발용) 로컬 테스트에 쓸 codex 받기. 설치 파일에는 넣지 않습니다
 npm test                      # 저장소 규칙 테스트
 cargo test --manifest-path src-tauri/Cargo.toml   # Rust 단위·통합 테스트
 npm run tauri dev             # 앱 실행 (Windows)

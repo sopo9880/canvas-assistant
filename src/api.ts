@@ -52,6 +52,16 @@ export type Model = {
   supportedReasoningEfforts?: Array<{ reasoningEffort: string; description?: string }>;
 };
 
+export type EngineStatus = {
+  platform: string | null;
+  supported: boolean;
+  installed: string | null;
+  previous: string | null;
+  pinned: string;
+  legacy: boolean;
+  busy: boolean;
+};
+
 export const api = {
   info: () => invoke<AppInfo>("app_info"),
   saveSettings: (patch: Partial<Settings>) => invoke<Settings>("settings_save", { patch }),
@@ -71,6 +81,10 @@ export const api = {
     invoke<void>("jobs_update", { kind, enabled, intervalMin, params }),
   runJob: (kind: string) => invoke<void>("jobs_run_now", { kind }),
   briefings: () => invoke<Array<{ id: number; at: number; text: string }>>("briefings_list"),
+  engineStatus: () => invoke<EngineStatus>("engine_status"),
+  engineCheck: () => invoke<{ latest: string; installed: string | null; newer: boolean }>("engine_check"),
+  engineInstall: (target: "pinned" | "latest") => invoke<EngineStatus>("engine_install", { target }),
+  engineRollback: () => invoke<EngineStatus>("engine_rollback"),
   codexStart: () => invoke<void>("codex_start"),
   codexLocate: () => invoke<{ found: boolean; path?: string; viaNode?: boolean; error?: string; source?: string }>("codex_locate"),
   diagnose: () => invoke<any>("codex_diagnose"),

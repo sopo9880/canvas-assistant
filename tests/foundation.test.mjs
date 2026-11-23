@@ -61,22 +61,25 @@ test("app icons generated from the logo are committed", () => {
   }
 });
 
-test("the installer bundles a pinned Codex and the bridge locks it down", () => {
+test("the installer does not bundle Codex; the app installs and verifies it itself", () => {
   const pkg = JSON.parse(read("package.json"));
   assert.match(pkg.codexVersion, /^\d+\.\d+\.\d+$/);
-  // Code Mode tool calls spawn codex-code-mode-host from the codex binary's folder, so both ship together.
+  // Neither platform config ships Codex any more.
   const win = JSON.parse(read("src-tauri/tauri.windows.conf.json")).bundle;
   assert.deepEqual(win.targets, ["nsis"]);
-  assert.equal(win.resources["resources/codex/codex.exe"], "codex/codex.exe");
-  assert.equal(win.resources["resources/codex/codex-code-mode-host.exe"], "codex/codex-code-mode-host.exe");
+  assert.equal(win.resources, undefined);
   const mac = JSON.parse(read("src-tauri/tauri.macos.conf.json")).bundle;
   assert.ok(mac.targets.includes("dmg"));
-  assert.equal(mac.resources["resources/codex/codex"], "codex/codex");
-  assert.equal(mac.resources["resources/codex/codex-code-mode-host"], "codex/codex-code-mode-host");
-  // The shared config must not pin one platform's binaries.
+  assert.equal(mac.resources, undefined);
   assert.equal(JSON.parse(read("src-tauri/tauri.conf.json")).bundle.resources, undefined);
   assert.match(read("src-tauri/Cargo.toml"), /apple-native/);
-  assert.ok(read("scripts/fetch-codex.mjs").includes("codex-code-mode-host.exe"));
+  const wf = read(".github/workflows/release.yml");
+  assert.ok(!wf.includes("fetch-codex"), "the release workflow must not bundle Codex");
+  // The engine module verifies npm's sha512, probes before switching and keeps a rollback copy.
+  const engine = read("src-tauri/src/engine.rs");
+  for (const part of ["sha512-", "fn probe", "fn rollback", "trusted_tarball", "valid_version", "model/list"]) {
+    assert.ok(engine.includes(part), part);
+  }
   const src = read("src-tauri/src/codex.rs");
   for (const flag of ['cli_auth_credentials_store=\\"keyring\\"', "features.shell_tool=false", 'web_search=\\"disabled\\"', '"CODEX_HOME"']) {
     assert.ok(src.includes(flag), flag);

@@ -95,7 +95,7 @@ pub fn parse_sums(text: &str, name: &str) -> Option<String> {
     })
 }
 
-fn agent(long: bool) -> ureq::Agent {
+pub(crate) fn agent(long: bool) -> ureq::Agent {
     let mut b = ureq::Agent::config_builder()
         .http_status_as_error(false)
         .user_agent(concat!("CanvasAssistant/", env!("CARGO_PKG_VERSION")));
@@ -158,7 +158,7 @@ pub fn verified_installer() -> Option<PathBuf> {
     VERIFIED.lock().ok().and_then(|g| g.clone()).filter(|p| p.is_file())
 }
 
-enum Step {
+pub(crate) enum Step {
     Done,
     Retry(String),
     Fail(String),
@@ -230,7 +230,7 @@ pub fn download(
     Err(format!("재시도 횟수를 초과했습니다. 다시 누르면 이어받습니다. ({last_error})"))
 }
 
-fn fetch(client: &ureq::Agent, asset: &Asset, part: &Path, received: u64, progress: &mut dyn FnMut(u64, u64)) -> Step {
+pub(crate) fn fetch(client: &ureq::Agent, asset: &Asset, part: &Path, received: u64, progress: &mut dyn FnMut(u64, u64)) -> Step {
     let mut req = client.get(&asset.url);
     if received > 0 {
         req = req.header("Range", format!("bytes={received}-"));
