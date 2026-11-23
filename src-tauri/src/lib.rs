@@ -28,7 +28,7 @@ use tauri_plugin_opener::OpenerExt;
 
 /// The version shown in the app and used by the update check. Hotfix releases have 4 parts (0.3.2.1)
 /// while Cargo/Tauri stay on 3-part semver; package.json "releaseVersion" must equal this.
-pub const APP_VERSION: &str = "0.4.0";
+pub const APP_VERSION: &str = "0.4.0.1";
 pub const RELEASES_URL: &str = "https://github.com/sopo9880/canvas-assistant/releases";
 
 pub struct AppState {

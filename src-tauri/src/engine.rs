@@ -158,12 +158,20 @@ pub fn parse_dist(v: &Value, version: &str, platform: &str) -> Result<Dist, Stri
     Ok(Dist { version: version.to_string(), tarball: tarball.to_string(), integrity: integrity.to_string() })
 }
 
+/// Package size. The npm CDN omits Content-Length on HEAD, so ask for the first byte and read
+/// the total from Content-Range (falling back to Content-Length when Range is ignored).
 fn content_length(url: &str) -> Result<u64, String> {
-    let resp = updater::agent(false).head(url).call().map_err(|e| format!("Codex 파일 정보를 가져오지 못했습니다: {e}"))?;
-    if resp.status().as_u16() != 200 {
-        return Err(format!("Codex 파일 정보 요청이 거절되었습니다 (HTTP {})", resp.status().as_u16()));
-    }
-    resp.headers().get("content-length").and_then(|h| h.to_str().ok()).and_then(|s| s.parse().ok()).ok_or_else(|| "Codex 파일 크기를 알 수 없습니다".to_string())
+    let resp = updater::agent(false).get(url).header("Range", "bytes=0-0").call().map_err(|e| format!("Codex 파일 정보를 가져오지 못했습니다: {e}"))?;
+    let status = resp.status().as_u16();
+    let headers = resp.headers();
+    let size = if status == 206 {
+        headers.get("content-range").and_then(|h| h.to_str().ok()).and_then(|r| r.rsplit('/').next()).and_then(|t| t.parse().ok())
+    } else if status == 200 {
+        headers.get("content-length").and_then(|h| h.to_str().ok()).and_then(|s| s.parse().ok())
+    } else {
+        return Err(format!("Codex 파일 정보 요청이 거절되었습니다 (HTTP {status})"));
+    };
+    size.ok_or_else(|| "Codex 파일 크기를 알 수 없습니다".to_string())
 }
 
 fn sha512_integrity(path: &Path) -> Result<String, String> {
