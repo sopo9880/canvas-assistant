@@ -160,18 +160,36 @@ pub fn parse_dist(v: &Value, version: &str, platform: &str) -> Result<Dist, Stri
 
 /// Package size. The npm CDN omits Content-Length on HEAD, so ask for the first byte and read
 /// the total from Content-Range (falling back to Content-Length when Range is ignored).
-fn content_length(url: &str) -> Result<u64, String> {
-    let resp = updater::agent(false).get(url).header("Range", "bytes=0-0").call().map_err(|e| format!("Codex 파일 정보를 가져오지 못했습니다: {e}"))?;
-    let status = resp.status().as_u16();
-    let headers = resp.headers();
-    let size = if status == 206 {
-        headers.get("content-range").and_then(|h| h.to_str().ok()).and_then(|r| r.rsplit('/').next()).and_then(|t| t.parse().ok())
-    } else if status == 200 {
-        headers.get("content-length").and_then(|h| h.to_str().ok()).and_then(|s| s.parse().ok())
-    } else {
-        return Err(format!("Codex 파일 정보 요청이 거절되었습니다 (HTTP {status})"));
-    };
-    size.ok_or_else(|| "Codex 파일 크기를 알 수 없습니다".to_string())
+/// A version published minutes ago can answer 404/5xx until the CDN catches up, so those are
+/// retried with back-off before giving up.
+fn content_length(url: &str, retry_base: Duration) -> Result<u64, String> {
+    let mut last = String::new();
+    for attempt in 0..5u32 {
+        if attempt > 0 {
+            std::thread::sleep(retry_base * 3 * (1u32 << (attempt - 1)));
+        }
+        let resp = match updater::agent(false).get(url).header("Range", "bytes=0-0").call() {
+            Ok(r) => r,
+            Err(e) => {
+                last = e.to_string();
+                continue;
+            }
+        };
+        let status = resp.status().as_u16();
+        let headers = resp.headers();
+        let size: Option<u64> = if status == 206 {
+            headers.get("content-range").and_then(|h| h.to_str().ok()).and_then(|r| r.rsplit('/').next()).and_then(|t| t.parse().ok())
+        } else if status == 200 {
+            headers.get("content-length").and_then(|h| h.to_str().ok()).and_then(|s| s.parse().ok())
+        } else if status == 404 || status == 429 || status >= 500 {
+            last = format!("HTTP {status}");
+            continue;
+        } else {
+            return Err(format!("Codex 파일 정보 요청이 거절되었습니다 (HTTP {status})"));
+        };
+        return size.ok_or_else(|| "Codex 파일 크기를 알 수 없습니다".to_string());
+    }
+    Err(format!("Codex 파일을 아직 받을 수 없습니다 ({last}). 방금 올라온 버전은 몇 분 뒤에 받을 수 있는 경우가 있으니 잠시 후 다시 시도하세요."))
 }
 
 fn sha512_integrity(path: &Path) -> Result<String, String> {
@@ -195,7 +213,7 @@ pub fn download(dist: &Dist, dir: &Path, trust: &dyn Fn(&str) -> bool, retry_bas
     if !trust(&dist.tarball) {
         return Err("허용되지 않는 다운로드 주소입니다".into());
     }
-    let size = content_length(&dist.tarball)?;
+    let size = content_length(&dist.tarball, retry_base)?;
     if size < 1 || size > MAX_PACKAGE_BYTES {
         return Err("Codex 파일 크기가 허용 범위를 벗어났습니다".into());
     }
