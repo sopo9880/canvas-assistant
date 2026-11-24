@@ -1,8 +1,16 @@
 //! Canvas Assistant: a Windows desktop assistant for Canvas LMS powered by Codex.
 pub mod canvas;
+pub mod canvas_ext;
 pub mod codex;
 pub mod config;
+pub mod engine;
 pub mod db;
+pub mod attachments;
+pub mod extract;
+pub mod generate;
+pub mod learningx;
+pub mod materials;
+mod updater;
 pub mod mcp;
 pub mod scheduler;
 
@@ -18,8 +26,10 @@ use tauri::{
 };
 use tauri_plugin_opener::OpenerExt;
 
+/// The version shown in the app and used by the update check. Hotfix releases have 4 parts (0.3.2.1)
+/// while Cargo/Tauri stay on 3-part semver; package.json "releaseVersion" must equal this.
+pub const APP_VERSION: &str = "0.4.2";
 pub const RELEASES_URL: &str = "https://github.com/sopo9880/canvas-assistant/releases";
-const RELEASES_API: &str = "https://api.github.com/repos/sopo9880/canvas-assistant/releases?per_page=10";
 
 pub struct AppState {
     pub data_dir: PathBuf,
@@ -53,7 +63,8 @@ async fn app_info(state: Shared<'_>) -> Result<Value, String> {
     blocking(move || {
         let settings = config::load(&s.data_dir);
         Ok(json!({
-            "version": env!("CARGO_PKG_VERSION"),
+            "version": APP_VERSION,
+            "platform": std::env::consts::OS,
             "dataDir": s.data_dir.to_string_lossy(),
             "hasToken": config::get_token().is_some(),
             "settings": settings,
@@ -76,11 +87,15 @@ async fn settings_save(state: Shared<'_>, patch: Value) -> Result<config::Settin
         if let Some(v) = patch.get("canvasToolsInChat").and_then(Value::as_bool) {
             settings.canvas_tools_in_chat = v;
         }
+        if let Some(v) = patch.get("engineAutoUpdate").and_then(Value::as_bool) {
+            settings.engine_auto_update = v;
+        }
         if let Some(v) = patch.get("codexPath") {
             settings.codex_path = v.as_str().map(str::trim).filter(|p| !p.is_empty()).map(str::to_string);
             if let Some(p) = &settings.codex_path {
-                if !p.to_ascii_lowercase().ends_with(".exe") || !std::path::Path::new(p).is_file() {
-                    return Err("codex.exe 파일의 전체 경로를 입력하세요.".into());
+                let exe_ok = !cfg!(windows) || p.to_ascii_lowercase().ends_with(".exe");
+                if !exe_ok || !std::path::Path::new(p).is_file() {
+                    return Err(if cfg!(windows) { "codex.exe 파일의 전체 경로를 입력하세요." } else { "codex 실행 파일의 전체 경로를 입력하세요." }.into());
                 }
             }
         }
@@ -97,30 +112,77 @@ async fn settings_save(state: Shared<'_>, patch: Value) -> Result<config::Settin
 #[tauri::command]
 async fn check_update() -> Result<Value, String> {
     blocking(|| {
-        let current = env!("CARGO_PKG_VERSION");
-        let agent: ureq::Agent = ureq::Agent::config_builder()
-            .http_status_as_error(false)
-            .timeout_global(Some(std::time::Duration::from_secs(15)))
-            .user_agent(concat!("CanvasAssistant/", env!("CARGO_PKG_VERSION")))
-            .build()
-            .into();
-        let mut resp = agent.get(RELEASES_API).header("Accept", "application/vnd.github+json").call().map_err(|e| e.to_string())?;
-        if resp.status().as_u16() != 200 {
+        let current = APP_VERSION;
+        let Some(release) = updater::latest()? else {
             // Private repository or rate limit: let the user check the page directly.
             return Ok(json!({"available": false, "current": current, "url": RELEASES_URL}));
-        }
-        let list: Value = resp.body_mut().read_json().map_err(|e| e.to_string())?;
-        let latest = list.as_array().and_then(|a| a.iter().find(|r| r.get("draft") != Some(&json!(true)))).cloned().unwrap_or(Value::Null);
-        let tag = latest.get("tag_name").and_then(Value::as_str).unwrap_or("").trim_start_matches('v').to_string();
+        };
+        let installer = updater::pick_installer(&release, std::env::consts::OS, std::env::consts::ARCH);
         Ok(json!({
             "available": true,
             "current": current,
-            "latest": tag,
-            "newer": !tag.is_empty() && version_newer(&tag, current),
-            "url": latest.get("html_url").and_then(Value::as_str).unwrap_or(RELEASES_URL),
-            "prerelease": latest.get("prerelease"),
+            "latest": release.version,
+            "newer": version_newer(&release.version, current),
+            "url": release.url,
+            "notes": release.notes.chars().take(3000).collect::<String>(),
+            "installable": installer.is_some(),
+            "installer": installer.map(|a| json!({"name": a.name, "size": a.size})),
+            "os": std::env::consts::OS,
         }))
     }).await
+}
+
+static UPDATE_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Downloads and SHA-256-verifies the installer of the newest release. The release is looked up
+/// again here, so the frontend can only ask for "the update", never name a URL or path.
+#[tauri::command]
+async fn download_update(app: AppHandle, state: Shared<'_>) -> Result<Value, String> {
+    let dir = state.data_dir.join("updates");
+    blocking(move || {
+        use std::sync::atomic::Ordering;
+        if UPDATE_BUSY.swap(true, Ordering::SeqCst) {
+            return Err("이미 내려받는 중입니다.".into());
+        }
+        let result = (|| {
+            let release = updater::latest()?.ok_or("릴리스 정보를 읽을 수 없습니다 (비공개 저장소이거나 요청 한도).")?;
+            if !version_newer(&release.version, APP_VERSION) {
+                return Err("이미 최신 버전입니다.".to_string());
+            }
+            let asset = updater::pick_installer(&release, std::env::consts::OS, std::env::consts::ARCH)
+                .ok_or("이 운영체제용 설치 파일이 릴리스에 없습니다.")?.clone();
+            let emitter = app.clone();
+            let path = updater::download(&release, &asset, &dir, &updater::trusted_asset_url, std::time::Duration::from_secs(1), &mut |received, total| {
+                let _ = emitter.emit("update-progress", json!({"received": received, "total": total}));
+            })?;
+            // Keep only the installer we just verified.
+            for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+                if e.path() != path {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+            Ok(json!({"version": release.version, "name": asset.name}))
+        })();
+        UPDATE_BUSY.store(false, Ordering::SeqCst);
+        result
+    }).await
+}
+
+/// Starts the installer that `download_update` verified. Windows: the setup runs in passive mode
+/// and relaunches the app, so this app exits right after starting it.
+#[tauri::command]
+async fn install_update(app: AppHandle) -> Result<Value, String> {
+    let result = blocking(|| {
+        let path = updater::verified_installer().ok_or("먼저 업데이트를 내려받으세요.")?;
+        updater::launch(&path)
+    }).await?;
+    if result.get("restart").and_then(Value::as_bool) == Some(true) {
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(800));
+            app.exit(0);
+        });
+    }
+    Ok(result)
 }
 
 /// Semver-ish comparison: 0.2.0 > 0.1.0, 0.1.0 > 0.1.0-beta.1.
@@ -216,6 +278,32 @@ async fn canvas_download(app: AppHandle, state: Shared<'_>, file_id: String) -> 
     Ok(path.to_string_lossy().into_owned())
 }
 
+#[tauri::command]
+async fn learningx_download(app: AppHandle, state: Shared<'_>, course_id: String, content_id: String) -> Result<String, String> {
+    let s = state.inner().clone();
+    let dir = app.path().download_dir().map_err(|e| e.to_string())?.join("Canvas Assistant");
+    let path = blocking(move || {
+        let course = canvas::require_id(&json!({"id": course_id}), "id")?;
+        let client = config::canvas_client(&s.data_dir)?;
+        let (name, bytes) = client.learningx_download(course, content_id.trim(), 500 * 1024 * 1024)?;
+        std::fs::create_dir_all(&dir).map_err(|e| format!("폴더를 만들 수 없습니다: {e}"))?;
+        let name = learningx::sanitize(&name);
+        let mut target = dir.join(&name);
+        let mut n = 1;
+        while target.exists() {
+            let p = std::path::Path::new(&name);
+            let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
+            let ext = p.extension().and_then(|s| s.to_str()).map(|e| format!(".{e}")).unwrap_or_default();
+            target = dir.join(format!("{stem} ({n}){ext}"));
+            n += 1;
+        }
+        std::fs::write(&target, bytes).map_err(|e| format!("파일을 저장할 수 없습니다: {e}"))?;
+        Ok::<_, String>(target)
+    }).await?;
+    let _ = app.opener().reveal_item_in_dir(&path);
+    Ok(path.to_string_lossy().into_owned())
+}
+
 // ---------------- approval queue ----------------
 
 #[tauri::command]
@@ -224,8 +312,53 @@ async fn pending_list(state: Shared<'_>, include_done: bool) -> Result<Vec<Value
     blocking(move || s.db.lock().map_err(|_| "db busy".to_string())?.list_pending(include_done)).await
 }
 
+/// Fields the user may change on a proposal before approving it.
+pub fn apply_edits(kind: &str, payload: &mut Value, edits: &Value) -> Result<(), String> {
+    let Some(edits) = edits.as_object() else { return Ok(()) };
+    let allowed: &[&str] = match kind {
+        "submit_text" => &["body", "comment"],
+        "submit_url" => &["url", "comment"],
+        "submit_files" => &["files", "comment"],
+        "submission_comment" => &["text"],
+        "discussion_reply" | "discussion_entry_reply" => &["message"],
+        "send_message" => &["subject", "body"],
+        "conversation_reply" => &["body"],
+        "planner_note" => &["title", "details", "todo_date"],
+        "calendar_event" => &["title", "start_at", "end_at", "description"],
+        _ => &[],
+    };
+    for (k, v) in edits {
+        if !allowed.contains(&k.as_str()) {
+            return Err(format!("이 요청에서는 '{k}'을(를) 바꿀 수 없습니다"));
+        }
+        if k == "files" {
+            let files = v.as_array().ok_or("files는 목록이어야 합니다")?;
+            for f in files {
+                let path = f.as_str().ok_or("파일 경로가 올바르지 않습니다")?;
+                if !std::path::Path::new(path).is_file() {
+                    return Err(format!("파일을 찾을 수 없습니다: {path}"));
+                }
+            }
+        } else if !v.is_string() {
+            return Err(format!("'{k}' 값이 올바르지 않습니다"));
+        }
+        payload[k.as_str()] = v.clone();
+    }
+    Ok(())
+}
+
+fn execute_logged(s: &AppState, db: &db::Db, kind: &str, payload: &Value, label: &str) -> Result<Value, String> {
+    let summary = canvas::describe_write(kind, payload);
+    let result = config::canvas_client(&s.data_dir).and_then(|c| c.execute_write(kind, payload).map_err(String::from));
+    match &result {
+        Ok(_) => db.audit(label, &summary, true),
+        Err(e) => db.audit(label, &format!("{summary} — 실패: {e}"), false),
+    }
+    result
+}
+
 #[tauri::command]
-async fn pending_decide(app: AppHandle, state: Shared<'_>, id: i64, approve: bool) -> Result<Value, String> {
+async fn pending_decide(app: AppHandle, state: Shared<'_>, id: i64, approve: bool, edits: Option<Value>) -> Result<Value, String> {
     let s = state.inner().clone();
     let out = blocking(move || {
         let db = db::Db::open(&s.data_dir)?;
@@ -234,24 +367,97 @@ async fn pending_decide(app: AppHandle, state: Shared<'_>, id: i64, approve: boo
             db.audit("reject", &format!("요청 #{id} 거절"), true);
             return Ok(json!({"status": "rejected"}));
         }
-        let (kind, payload) = db.claim_pending(id)?;
-        let summary = canvas::describe_write(&kind, &payload);
-        let result = config::canvas_client(&s.data_dir).and_then(|c| c.execute_write(&kind, &payload).map_err(String::from));
-        match result {
+        let (kind, mut payload) = db.claim_pending(id)?;
+        if let Err(e) = apply_edits(&kind, &mut payload, edits.as_ref().unwrap_or(&Value::Null)) {
+            // Return the request to the queue so the user can fix it.
+            db.finish_pending(id, "pending", "")?;
+            return Err(e);
+        }
+        match execute_logged(&s, &db, &kind, &payload, "execute") {
             Ok(r) => {
                 db.finish_pending(id, "done", &r.to_string())?;
-                db.audit("execute", &summary, true);
                 Ok(json!({"status": "done", "result": r}))
             }
             Err(e) => {
                 db.finish_pending(id, "failed", &e)?;
-                db.audit("execute", &format!("{summary} — 실패: {e}"), false);
                 Err(e)
             }
         }
     }).await;
     let _ = app.emit("pending-changed", json!({}));
+    // An approved submission or edit changes what the dashboard and lists show.
+    if approve && out.is_ok() {
+        let _ = app.emit("canvas-updated", json!({"kind": "approval"}));
+    }
     out
+}
+
+/// A Canvas change the user started from the app's own UI (after a confirmation there).
+#[tauri::command]
+async fn canvas_action(state: Shared<'_>, kind: String, params: Value) -> Result<Value, String> {
+    let s = state.inner().clone();
+    blocking(move || {
+        if !canvas::WRITE_KINDS.contains(&kind.as_str()) {
+            return Err("지원하지 않는 작업입니다".into());
+        }
+        if let Some(files) = params.get("files").and_then(Value::as_array) {
+            for f in files {
+                if !f.as_str().is_some_and(|p| std::path::Path::new(p).is_file()) {
+                    return Err(format!("파일을 찾을 수 없습니다: {f}"));
+                }
+            }
+        }
+        let db = db::Db::open(&s.data_dir)?;
+        execute_logged(&s, &db, &kind, &params, "user_action")
+    }).await
+}
+
+/// Opens the Windows file picker and returns the chosen paths with sizes.
+#[tauri::command]
+async fn pick_files(app: AppHandle, extensions: Option<Vec<String>>, title: Option<String>) -> Result<Vec<Value>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    blocking(move || {
+        let title = title.filter(|t| !t.trim().is_empty() && t.len() < 80).unwrap_or_else(|| "제출할 파일 선택".into());
+        let mut dialog = app.dialog().file().set_title(&title);
+        let exts: Vec<String> = extensions.unwrap_or_default().into_iter()
+            .map(|e| e.trim().trim_start_matches('.').to_ascii_lowercase())
+            .filter(|e| !e.is_empty() && e.len() <= 10 && e.chars().all(|c| c.is_ascii_alphanumeric())).collect();
+        if !exts.is_empty() {
+            let refs: Vec<&str> = exts.iter().map(String::as_str).collect();
+            dialog = dialog.add_filter("허용된 파일", &refs);
+        }
+        let picked = dialog.blocking_pick_files().unwrap_or_default();
+        Ok(picked.into_iter().filter_map(|f| f.into_path().ok()).map(|p| {
+            let size = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+            json!({"path": p.to_string_lossy(), "name": p.file_name().and_then(|n| n.to_str()).unwrap_or(""), "size": size})
+        }).collect())
+    }).await
+}
+
+/// Name and size of files dropped onto the submit dialog. Folders are skipped and counted.
+pub fn describe_paths(paths: &[String]) -> (Vec<Value>, usize) {
+    let mut files = Vec::new();
+    let mut skipped = 0;
+    for raw in paths.iter().take(50) {
+        let p = std::path::Path::new(raw);
+        match std::fs::metadata(p) {
+            Ok(m) if m.is_file() => files.push(json!({
+                "path": p.to_string_lossy(),
+                "name": p.file_name().and_then(|n| n.to_str()).unwrap_or(""),
+                "size": m.len(),
+            })),
+            _ => skipped += 1,
+        }
+    }
+    (files, skipped)
+}
+
+#[tauri::command]
+async fn describe_files(paths: Vec<String>) -> Result<Value, String> {
+    blocking(move || {
+        let (files, skipped) = describe_paths(&paths);
+        Ok(json!({"files": files, "skipped": skipped}))
+    }).await
 }
 
 #[tauri::command]
@@ -309,6 +515,74 @@ async fn briefings_list(state: Shared<'_>) -> Result<Vec<Value>, String> {
     blocking(move || s.db.lock().map_err(|_| "db busy".to_string())?.briefings()).await
 }
 
+/// Opens an http(s) link in the default browser. The WebView has no opener permission;
+/// every external link goes through this check.
+#[tauri::command]
+fn open_external(app: AppHandle, url: String) -> Result<(), String> {
+    let parsed = url::Url::parse(url.trim()).map_err(|_| "올바른 주소가 아닙니다".to_string())?;
+    if !matches!(parsed.scheme(), "https" | "http") || parsed.host_str().is_none() {
+        return Err("http(s) 주소만 열 수 있습니다".into());
+    }
+    app.opener().open_url(parsed.as_str(), None::<&str>).map_err(|e| format!("브라우저를 열 수 없습니다: {e}"))
+}
+
+/// Copies files the user picked or dropped into the chat's attachment store.
+#[tauri::command]
+async fn chat_attach(state: Shared<'_>, paths: Vec<String>) -> Result<Vec<Value>, String> {
+    let s = state.inner().clone();
+    blocking(move || {
+        if paths.len() > 20 {
+            return Err("한 번에 20개까지 첨부할 수 있습니다".into());
+        }
+        paths.iter().map(|p| attachments::store_path(&s.data_dir, std::path::Path::new(p))).collect()
+    }).await
+}
+
+/// Stores a pasted image (base64 from the clipboard).
+#[tauri::command]
+async fn chat_attach_bytes(state: Shared<'_>, name: String, data: String) -> Result<Value, String> {
+    use base64::Engine;
+    let s = state.inner().clone();
+    blocking(move || {
+        if data.len() as u64 > attachments::MAX_BYTES * 4 / 3 + 16 {
+            return Err("첨부가 너무 큽니다 (100MB 이하)".into());
+        }
+        let bytes = base64::engine::general_purpose::STANDARD.decode(data.trim()).map_err(|_| "붙여넣은 데이터를 읽을 수 없습니다".to_string())?;
+        attachments::store(&s.data_dir, &name, &bytes)
+    }).await
+}
+
+/// Opens (or shows in its folder) a file the AI made. Only files inside the AI output folder
+/// qualify, and scripts/code are only revealed, never opened, so nothing the AI wrote runs.
+#[tauri::command]
+fn open_generated(app: AppHandle, path: String, reveal: bool) -> Result<(), String> {
+    let dir = codex::generated_dir(&app)?;
+    let p = std::path::PathBuf::from(path.trim());
+    if !generate::is_inside(&dir, &p) || !p.is_file() {
+        return Err("AI가 만든 파일 폴더 밖의 파일은 열 수 없습니다 (파일이 옮겨졌거나 지워졌을 수 있음)".into());
+    }
+    let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if reveal || !generate::safe_to_open(name) {
+        return app.opener().reveal_item_in_dir(&p).map_err(|e| format!("폴더를 열 수 없습니다: {e}"));
+    }
+    app.opener().open_path(p.to_string_lossy(), None::<&str>).map_err(|e| format!("파일을 열 수 없습니다: {e}"))
+}
+
+#[tauri::command]
+fn open_generated_folder(app: AppHandle) -> Result<String, String> {
+    let dir = codex::generated_dir(&app)?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    app.opener().open_path(dir.to_string_lossy(), None::<&str>).map_err(|e| format!("폴더를 열 수 없습니다: {e}"))?;
+    Ok(dir.to_string_lossy().into_owned())
+}
+
+/// Checks that Codex can start the Canvas tools and call one, for troubleshooting.
+#[tauri::command]
+async fn codex_diagnose(app: AppHandle, state: Shared<'_>) -> Result<Value, String> {
+    let s = state.inner().clone();
+    blocking(move || s.codex.diagnose(&app)).await
+}
+
 // ---------------- Codex ----------------
 
 #[tauri::command]
@@ -324,12 +598,98 @@ async fn codex_call(app: AppHandle, state: Shared<'_>, method: String, params: V
 }
 
 #[tauri::command]
-fn codex_locate(state: Shared<'_>) -> Value {
+fn codex_locate(app: AppHandle, state: Shared<'_>) -> Value {
     let settings = config::load(&state.data_dir);
-    match codex::resolve_codex(settings.codex_path.as_deref()) {
-        Ok((p, args)) => json!({"found": true, "path": p.to_string_lossy(), "viaNode": !args.is_empty()}),
+    match codex::locate_codex(settings.codex_path.as_deref(), codex::bundled_codex(&app)) {
+        Ok((p, args, source)) => json!({
+            "found": true,
+            "path": p.to_string_lossy(),
+            "viaNode": !args.is_empty(),
+            "source": match source { codex::CodexSource::Bundled => "bundled", codex::CodexSource::Custom => "custom", codex::CodexSource::System => "system" },
+        }),
         Err(e) => json!({"found": false, "error": e}),
     }
+}
+
+// ---------------- Codex engine (downloaded and managed by the app) ----------------
+
+static ENGINE_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn engine_status_json(app: &AppHandle, data_dir: &std::path::Path) -> Value {
+    let mut v = engine::status(&engine::engine_root(data_dir));
+    let legacy = app.path().resource_dir().ok().is_some_and(|d| d.join("codex").join(if cfg!(windows) { "codex.exe" } else { "codex" }).is_file());
+    v["legacy"] = json!(legacy);
+    v["busy"] = json!(ENGINE_BUSY.load(std::sync::atomic::Ordering::SeqCst));
+    v
+}
+
+/// True while an AI answer is being produced; auto-update waits for it to finish.
+#[tauri::command]
+fn codex_busy() -> bool {
+    codex::turn_in_progress()
+}
+
+#[tauri::command]
+fn engine_status(app: AppHandle, state: Shared<'_>) -> Value {
+    engine_status_json(&app, &state.data_dir)
+}
+
+/// Looks up the newest stable Codex. Never installs anything.
+#[tauri::command]
+async fn engine_check(app: AppHandle, state: Shared<'_>) -> Result<Value, String> {
+    let data_dir = state.data_dir.clone();
+    blocking(move || {
+        let latest = engine::latest_version(engine::REGISTRY)?;
+        let status = engine_status_json(&app, &data_dir);
+        let installed = status.get("installed").and_then(Value::as_str).map(str::to_string);
+        let newer = installed.as_deref().map_or(true, |i| version_newer(&latest, i));
+        Ok(json!({"latest": latest, "installed": installed, "newer": newer}))
+    }).await
+}
+
+/// `target` is "pinned" (first install: the version this app was tested with) or "latest".
+/// The new version is downloaded, verified and probed beside the current one; only then is it
+/// switched on and the Codex connection restarted. Chats and the login are not touched.
+#[tauri::command]
+async fn engine_install(app: AppHandle, state: Shared<'_>, target: String) -> Result<Value, String> {
+    let s = state.inner().clone();
+    blocking(move || {
+        use std::sync::atomic::Ordering;
+        if ENGINE_BUSY.swap(true, Ordering::SeqCst) {
+            return Err("이미 설치 중입니다.".into());
+        }
+        let result = (|| {
+            let platform = engine::platform().ok_or("이 운영체제에서는 AI 엔진 자동 설치를 지원하지 않습니다.")?;
+            let version = match target.as_str() {
+                "pinned" => engine::PINNED.to_string(),
+                "latest" => engine::latest_version(engine::REGISTRY)?,
+                _ => return Err("알 수 없는 설치 대상입니다.".to_string()),
+            };
+            let root = engine::engine_root(&s.data_dir);
+            let emitter = app.clone();
+            let installed = engine::install(&root, engine::REGISTRY, &version, platform, &engine::trusted_tarball, std::time::Duration::from_secs(1), &|p, v| engine::probe(p, v).map(|_| ()), &mut |stage, received, total| {
+                let _ = emitter.emit("engine-progress", json!({"stage": stage, "received": received, "total": total}));
+            })?;
+            s.codex.stop();
+            engine::cleanup(&root);
+            let _ = app.emit("engine-changed", json!({"version": installed.current}));
+            Ok(engine_status_json(&app, &s.data_dir))
+        })();
+        ENGINE_BUSY.store(false, Ordering::SeqCst);
+        result
+    }).await
+}
+
+#[tauri::command]
+async fn engine_rollback(app: AppHandle, state: Shared<'_>) -> Result<Value, String> {
+    let s = state.inner().clone();
+    blocking(move || {
+        let root = engine::engine_root(&s.data_dir);
+        let st = engine::rollback(&root)?;
+        s.codex.stop();
+        let _ = app.emit("engine-changed", json!({"version": st.current}));
+        Ok(engine_status_json(&app, &s.data_dir))
+    }).await
 }
 
 // ---------------- setup ----------------
@@ -378,11 +738,16 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--minimized"])))
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             let database = db::Db::open(&data_dir).map_err(|e| Box::<dyn std::error::Error>::from(e))?;
             database.recover_stuck();
+            {
+                let dir = data_dir.clone();
+                std::thread::spawn(move || attachments::cleanup(&dir));
+            }
             let state = Arc::new(AppState {
                 data_dir,
                 codex: Arc::new(codex::CodexState::default()),
@@ -419,24 +784,53 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            app_info, settings_save, check_update,
+            app_info, settings_save, engine_status, codex_busy, engine_check, engine_install, engine_rollback, check_update, download_update, install_update, describe_files,
             canvas_connect, canvas_disconnect, canvas_query, canvas_download,
-            pending_list, pending_decide, audit_list,
+            learningx_download,
+            pending_list, pending_decide, canvas_action, pick_files, audit_list,
             jobs_list, jobs_update, jobs_run_now, briefings_list,
-            codex_start, codex_call, codex_locate
+            codex_start, codex_call, codex_locate, codex_diagnose, open_external, open_generated, open_generated_folder, chat_attach, chat_attach_bytes
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Canvas Assistant")
-        .run(|app, event| {
-            if let tauri::RunEvent::Exit = event {
-                app.state::<Arc<AppState>>().codex.stop();
-            }
+        .run(|app, event| match event {
+            tauri::RunEvent::Exit => app.state::<Arc<AppState>>().codex.stop(),
+            // macOS: clicking the Dock icon brings back a window hidden by "close to tray".
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { has_visible_windows: false, .. } => show_main(app),
+            _ => {}
         });
 }
 
 #[cfg(test)]
 mod tests {
-    use super::version_newer;
+    use super::{apply_edits, describe_paths, version_newer};
+    use serde_json::json;
+
+    #[test]
+    fn dropped_paths_keep_files_and_skip_folders() {
+        let dir = std::env::temp_dir().join(format!("ca-drop-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("폴더")).unwrap();
+        let f = dir.join("보고서 최종.pdf");
+        std::fs::write(&f, b"12345").unwrap();
+        let paths = vec![f.to_string_lossy().to_string(), dir.join("폴더").to_string_lossy().to_string(), dir.join("없음.txt").to_string_lossy().to_string()];
+        let (files, skipped) = describe_paths(&paths);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0]["name"], "보고서 최종.pdf");
+        assert_eq!(files[0]["size"], 5);
+        assert_eq!(skipped, 2);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn proposal_edits_are_limited() {
+        let mut p = json!({"course_id": 1, "assignment_id": 2, "body": "old"});
+        apply_edits("submit_text", &mut p, &json!({"body": "new", "comment": "c"})).unwrap();
+        assert_eq!(p["body"], "new");
+        assert!(apply_edits("submit_text", &mut p, &json!({"course_id": 9})).is_err());
+        assert!(apply_edits("submit_files", &mut p, &json!({"files": ["/definitely/not/here.pdf"]})).is_err());
+        assert!(apply_edits("planner_complete", &mut p, &json!({"complete": false})).is_err());
+    }
 
     #[test]
     fn compares_versions() {

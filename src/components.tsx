@@ -1,10 +1,16 @@
 import React from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { invoke } from "@tauri-apps/api/core";
+
+/** Opens an http(s) link in the default browser (validated again in Rust). */
+export async function openExternal(url?: string | null): Promise<void> {
+  if (!url || !/^https?:\/\//i.test(url)) throw new Error("열 수 없는 주소입니다");
+  await invoke("open_external", { url });
+}
 
 export function open(url?: string | null) {
-  if (url && /^https?:\/\//i.test(url)) void openUrl(url);
+  if (url && /^https?:\/\//i.test(url)) openExternal(url).catch((e) => window.alert(`링크를 열 수 없습니다: ${e}\n\n${url}`));
 }
 
 export function Markdown({ text }: { text: string }) {

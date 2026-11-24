@@ -12,6 +12,17 @@ test("version matches across package.json, tauri.conf.json and Cargo.toml", () =
   assert.equal(pkg, cargo);
 });
 
+test("release version (may have 4 parts) extends the bundled version and matches the app constant", () => {
+  // Cargo, Tauri and the Windows installer need 3-part semver; hotfix releases like 0.3.2.1 are
+  // named by releaseVersion (tag, file names, in-app version and update check).
+  const pkg = JSON.parse(read("package.json"));
+  const release = pkg.releaseVersion ?? pkg.version;
+  assert.match(release, /^\d+\.\d+\.\d+(\.\d+)?$/);
+  assert.ok(release === pkg.version || release.startsWith(pkg.version + "."), `${release} must extend ${pkg.version}`);
+  const constant = read("src-tauri/src/lib.rs").match(/pub const APP_VERSION: &str = "([^"]+)";/)[1];
+  assert.equal(constant, release);
+});
+
 test("window capabilities stay minimal (no shell, fs or http plugins)", () => {
   const cap = JSON.stringify(JSON.parse(read("src-tauri/capabilities/default.json")));
   for (const forbidden of ["shell:", "fs:", "http:", "dialog:", "process:"]) assert.ok(!cap.includes(forbidden), forbidden);
@@ -48,4 +59,60 @@ test("app icons generated from the logo are committed", () => {
   for (const f of ["32x32.png", "128x128.png", "128x128@2x.png", "icon.ico", "icon.png"]) {
     assert.ok(fs.existsSync(`src-tauri/icons/${f}`), f);
   }
+});
+
+test("the installer does not bundle Codex; the app installs and verifies it itself", () => {
+  const pkg = JSON.parse(read("package.json"));
+  assert.match(pkg.codexVersion, /^\d+\.\d+\.\d+$/);
+  // Neither platform config ships Codex any more.
+  const win = JSON.parse(read("src-tauri/tauri.windows.conf.json")).bundle;
+  assert.deepEqual(win.targets, ["nsis"]);
+  assert.equal(win.resources, undefined);
+  const mac = JSON.parse(read("src-tauri/tauri.macos.conf.json")).bundle;
+  assert.ok(mac.targets.includes("dmg"));
+  assert.equal(mac.resources, undefined);
+  assert.equal(JSON.parse(read("src-tauri/tauri.conf.json")).bundle.resources, undefined);
+  assert.match(read("src-tauri/Cargo.toml"), /apple-native/);
+  const wf = read(".github/workflows/release.yml");
+  assert.ok(!wf.includes("fetch-codex"), "the release workflow must not bundle Codex");
+  // The engine module verifies npm's sha512, probes before switching and keeps a rollback copy.
+  const engine = read("src-tauri/src/engine.rs");
+  for (const part of ["sha512-", "fn probe", "fn rollback", "trusted_tarball", "valid_version", "model/list"]) {
+    assert.ok(engine.includes(part), part);
+  }
+  const src = read("src-tauri/src/codex.rs");
+  for (const flag of ['cli_auth_credentials_store=\\"keyring\\"', "features.shell_tool=false", 'web_search=\\"disabled\\"', '"CODEX_HOME"']) {
+    assert.ok(src.includes(flag), flag);
+  }
+});
+
+test("links open through the validated open_external command, not a WebView permission", () => {
+  const cap = JSON.stringify(JSON.parse(read("src-tauri/capabilities/default.json")));
+  assert.ok(!cap.includes("opener:"), "the WebView gets no opener permission");
+  const lib = read("src-tauri/src/lib.rs");
+  assert.ok(lib.includes("fn open_external") && lib.includes('matches!(parsed.scheme(), "https" | "http")'));
+  assert.ok(read("src/components.tsx").includes('invoke("open_external"'));
+  for (const f of ["src/App.tsx", "src/components.tsx", "src/CodexLogin.tsx"]) {
+    assert.ok(!read(f).includes("plugin-opener"), f);
+  }
+});
+
+test("AI proposals cannot carry local file paths and user-only actions are not proposable", () => {
+  const mcp = read("src-tauri/src/mcp.rs");
+  assert.ok(mcp.includes('obj.remove("files")'));
+  assert.ok(mcp.includes('"what_if_reset" | "conversation_read"'));
+});
+
+test("the generic Canvas API tool is read-only and path-guarded", () => {
+  const ext = read("src-tauri/src/canvas_ext.rs");
+  assert.ok(ext.includes("pub fn safe_api_path") && ext.includes('p.contains("..")'));
+  const apiGet = ext.slice(ext.indexOf("pub fn api_get"), ext.indexOf("// ---------------- file upload"));
+  assert.ok(apiGet.includes("get_all") && !apiGet.includes("post_form") && !apiGet.includes("put_form"));
+});
+
+test("storage uploads never carry the Canvas token", () => {
+  const ext = read("src-tauri/src/canvas_ext.rs");
+  const upload = ext.slice(ext.indexOf("pub fn upload_file"), ext.indexOf("// ---------------- writes"));
+  const storagePost = upload.slice(upload.indexOf("storage.post"), upload.indexOf(".send(&body"));
+  assert.ok(!storagePost.includes("Authorization"));
 });

@@ -5,6 +5,7 @@ export type Settings = {
   closeToTray: boolean;
   notifications: boolean;
   codexPath: string | null;
+  engineAutoUpdate: boolean;
   defaultModel: string | null;
   defaultEffort: string | null;
   canvasToolsInChat: boolean;
@@ -12,6 +13,8 @@ export type Settings = {
 
 export type AppInfo = {
   version: string;
+  /** Rust std::env::consts::OS: "windows", "macos", … */
+  platform?: string;
   dataDir: string;
   hasToken: boolean;
   settings: Settings;
@@ -50,24 +53,43 @@ export type Model = {
   supportedReasoningEfforts?: Array<{ reasoningEffort: string; description?: string }>;
 };
 
+export type EngineStatus = {
+  platform: string | null;
+  supported: boolean;
+  installed: string | null;
+  previous: string | null;
+  pinned: string;
+  legacy: boolean;
+  busy: boolean;
+};
+
 export const api = {
   info: () => invoke<AppInfo>("app_info"),
   saveSettings: (patch: Partial<Settings>) => invoke<Settings>("settings_save", { patch }),
   checkUpdate: () => invoke<any>("check_update"),
+  downloadUpdate: () => invoke<any>("download_update"),
+  installUpdate: () => invoke<any>("install_update"),
   canvasConnect: (baseUrl: string, token?: string) => invoke<{ baseUrl: string; profile: any }>("canvas_connect", { baseUrl, token: token || null }),
   canvasDisconnect: () => invoke<void>("canvas_disconnect"),
   canvas: <T = any>(tool: string, args: Record<string, unknown> = {}) => invoke<T>("canvas_query", { tool, args }),
   download: (fileId: string) => invoke<string>("canvas_download", { fileId: String(fileId) }),
+  lxDownload: (courseId: string, contentId: string) => invoke<string>("learningx_download", { courseId: String(courseId), contentId: String(contentId) }),
   pending: (includeDone = false) => invoke<Pending[]>("pending_list", { includeDone }),
-  decide: (id: number, approve: boolean) => invoke<any>("pending_decide", { id, approve }),
+  decide: (id: number, approve: boolean, edits?: Record<string, unknown>) => invoke<any>("pending_decide", { id, approve, edits: edits ?? null }),
   audit: () => invoke<Array<{ at: number; action: string; detail: string; ok: boolean }>>("audit_list"),
   jobs: () => invoke<Job[]>("jobs_list"),
   updateJob: (kind: string, enabled: boolean, intervalMin: number, params: Record<string, unknown>) =>
     invoke<void>("jobs_update", { kind, enabled, intervalMin, params }),
   runJob: (kind: string) => invoke<void>("jobs_run_now", { kind }),
   briefings: () => invoke<Array<{ id: number; at: number; text: string }>>("briefings_list"),
+  codexBusy: () => invoke<boolean>("codex_busy"),
+  engineStatus: () => invoke<EngineStatus>("engine_status"),
+  engineCheck: () => invoke<{ latest: string; installed: string | null; newer: boolean }>("engine_check"),
+  engineInstall: (target: "pinned" | "latest") => invoke<EngineStatus>("engine_install", { target }),
+  engineRollback: () => invoke<EngineStatus>("engine_rollback"),
   codexStart: () => invoke<void>("codex_start"),
-  codexLocate: () => invoke<{ found: boolean; path?: string; viaNode?: boolean; error?: string }>("codex_locate"),
+  codexLocate: () => invoke<{ found: boolean; path?: string; viaNode?: boolean; error?: string; source?: string }>("codex_locate"),
+  diagnose: () => invoke<any>("codex_diagnose"),
   codex: <T = any>(method: string, params: Record<string, unknown> = {}) => invoke<T>("codex_call", { method, params }),
 };
 

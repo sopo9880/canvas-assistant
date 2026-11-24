@@ -17,6 +17,8 @@ pub struct Settings {
     pub default_model: Option<String>,
     pub default_effort: Option<String>,
     pub canvas_tools_in_chat: bool,
+    /// Install new stable Codex versions automatically (never while an answer is running).
+    pub engine_auto_update: bool,
 }
 
 impl Default for Settings {
@@ -29,6 +31,7 @@ impl Default for Settings {
             default_model: None,
             default_effort: None,
             canvas_tools_in_chat: true,
+            engine_auto_update: false,
         }
     }
 }

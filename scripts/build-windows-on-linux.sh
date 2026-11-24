@@ -50,12 +50,13 @@ export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_AR=x86_64-w64-mingw32-ar
 
 npm ci --no-audit --no-fund
 npm test
+rm -rf "src-tauri/target/$TARGET/release/bundle" release
 npx tauri build --target "$TARGET" --bundles nsis
 
-VERSION="$(node -p "require('./package.json').version")"
+VERSION="$(node -p "const p=require('./package.json'); p.releaseVersion || p.version")"
 BUNDLE="src-tauri/target/$TARGET/release/bundle/nsis"
 mkdir -p release
-OUT="release/CanvasAssistant-$VERSION-x64-setup.exe"
+OUT="release/CanvasAssistant-$VERSION-windows-x64-setup.exe"
 cp "$BUNDLE/"*-setup.exe "$OUT"
 (cd release && sha256sum "$(basename "$OUT")" > SHA256SUMS.txt && cat SHA256SUMS.txt)
 echo "Built $OUT"
