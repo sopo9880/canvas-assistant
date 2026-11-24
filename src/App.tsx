@@ -35,6 +35,8 @@ export type EngineState = {
   target: "pinned" | "latest";
   /** Newest stable Codex found by the background check (set only when newer than installed). */
   latest?: string | null;
+  /** Why the last automatic update did not happen (the old engine keeps working). */
+  autoError?: string;
 };
 
 export type LoginState = {
@@ -56,7 +58,7 @@ type Ctx = {
   codex: CodexStatus;
   connectCodex: () => Promise<void>;
   engine: EngineState;
-  installEngine: (target: "pinned" | "latest") => Promise<boolean>;
+  installEngine: (target: "pinned" | "latest", auto?: boolean) => Promise<boolean>;
   checkEngine: () => Promise<{ latest: string; installed: string | null; newer: boolean } | null>;
   refreshAccount: () => Promise<void>;
   go: (tab: Tab) => void;
@@ -121,7 +123,7 @@ export default function App() {
     }
   }, [refreshAccount]);
 
-  const installEngine = useCallback(async (target: "pinned" | "latest") => {
+  const installEngine = useCallback(async (target: "pinned" | "latest", auto = false) => {
     setEngine({ phase: "installing", stage: "resolve", received: 0, total: 0, target });
     try {
       await api.engineInstall(target);
@@ -130,19 +132,35 @@ export default function App() {
       await connectCodex();
       return true;
     } catch (e) {
+      if (auto) {
+        // The running engine is untouched by a failed update; just report why.
+        setEngine({ phase: "idle", stage: "", received: 0, total: 0, target, autoError: `자동 업데이트에 실패했습니다: ${errorText(e)}` });
+        return false;
+      }
       setEngine({ phase: "error", stage: "", received: 0, total: 0, target, error: errorText(e) });
       setCodex({ state: "error", error: "AI 엔진(Codex)이 준비되지 않았습니다." });
       return false;
     }
   }, [connectCodex]);
 
+  const engineRef = useRef(engine);
+  useEffect(() => { engineRef.current = engine; }, [engine]);
+
   const checkEngine = useCallback(async () => {
     try {
       const r = await api.engineCheck();
       setEngine((e) => ({ ...e, latest: r.newer && r.installed ? r.latest : null }));
+      // Automatic update: only when the user enabled it, never mid-answer (retry in 5 minutes).
+      if (r.newer && r.installed && engineRef.current.phase === "idle") {
+        const enabled = (await api.info()).settings.engineAutoUpdate;
+        if (enabled) {
+          if (await api.codexBusy().catch(() => true)) setTimeout(() => void checkEngine(), 5 * 60 * 1000);
+          else await installEngine("latest", true);
+        }
+      }
       return r;
     } catch { return null; }
-  }, []);
+  }, [installEngine]);
 
   useEffect(() => {
     const un = listen<{ stage: string; received: number; total: number }>("engine-progress", (e) => {

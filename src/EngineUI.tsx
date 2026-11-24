@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, EngineStatus, errorText } from "./api";
 import { useApp } from "./App";
-import { Banner, Spinner } from "./components";
+import { Banner, Spinner, Toggle } from "./components";
 import { bytes } from "./util";
 
 const STAGES: Record<string, string> = {
@@ -35,7 +35,7 @@ export function EngineProgress() {
 
 /** Settings card: which Codex is installed, and the update / rollback buttons. */
 export function EngineCard() {
-  const { engine, installEngine, checkEngine, connectCodex } = useApp();
+  const { engine, installEngine, checkEngine, connectCodex, info, refreshInfo } = useApp();
   const [status, setStatus] = useState<EngineStatus | null>(null);
   const [checking, setChecking] = useState(false);
   const [note, setNote] = useState<{ tone: "ok" | "error" | "info"; text: string } | null>(null);
@@ -79,9 +79,13 @@ export function EngineCard() {
         <span>{status.installed ? `v${status.installed}` : status.legacy ? "설치 프로그램에 포함된 버전 (구버전 설치)" : "설치되지 않음"}</span>
         {status.previous && (<><span>이전 버전</span><span>v{status.previous} (되돌리기 가능)</span></>)}
         <span>업데이트</span>
-        <span>{latest ? `새 버전 v${latest} 사용 가능` : "자동으로 바꾸지 않습니다. 버튼을 눌렀을 때만 업데이트합니다."}</span>
+        <span>{latest ? `새 버전 v${latest} 사용 가능` : info?.settings.engineAutoUpdate ? "자동 업데이트 켜짐" : "자동으로 바꾸지 않습니다. 버튼을 눌렀을 때만 업데이트합니다."}</span>
       </div>
+      <Toggle label="새 버전이 나오면 자동으로 업데이트" hint="켜면 새 안정 버전을 받아 검증한 뒤 알아서 바꿉니다. AI가 답하는 중에는 기다렸다가 합니다. 끄면 버튼을 누를 때만 업데이트합니다."
+        checked={!!info?.settings.engineAutoUpdate}
+        onChange={(v) => void api.saveSettings({ engineAutoUpdate: v }).then(async () => { await refreshInfo(); if (v) void checkEngine(); })} />
       <EngineProgress />
+      {engine.autoError && <Banner>{engine.autoError}</Banner>}
       {note && <Banner tone={note.tone}>{note.text}</Banner>}
       <div className="row">
         {!status.installed && status.supported && <button className="primary" disabled={busy} onClick={() => void installEngine("pinned")}>{status.legacy ? "앱이 관리하는 엔진으로 전환" : "AI 엔진 설치"}</button>}

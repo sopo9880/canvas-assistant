@@ -489,7 +489,7 @@ impl Client {
         let mut view = |a: &Value| -> Value {
             let mut a = a.clone();
             let has_submission = a.get("submission").is_some_and(Value::is_object);
-            if !has_submission && lookups < 40 {
+            if !has_submission && lookups < 100 {
                 if let (Some(c), Some(id)) = (id_number(a.get("course_id")), id_number(a.get("id"))) {
                     lookups += 1;
                     if let Ok(full) = self.get(&format!("courses/{c}/assignments/{id}"), &[("include[]", "submission".to_string())]) {
@@ -501,7 +501,7 @@ impl Client {
             }
             Self::assignment_view(&a, false)
         };
-        let todo: Vec<Value> = todo.iter().map(|t| {
+        let mut todo: Vec<Value> = todo.iter().map(|t| {
             let mut out = pick(t, &["type", "context_name", "course_id", "html_url"]);
             if let Some(a) = t.get("assignment") {
                 out["assignment"] = view(a);
@@ -515,6 +515,22 @@ impl Client {
             }
             out
         }).collect();
+        // Canvas's to-do list is short and its upcoming-events feed only reaches about a week
+        // ahead, so also take every course's own "upcoming" assignments. Nothing is capped.
+        let mut known: std::collections::HashSet<String> = todo.iter().chain(events.iter())
+            .filter_map(|t| t.pointer("/assignment/id")).map(|i| i.to_string().trim_matches('"').to_string()).collect();
+        for course in self.courses(false).unwrap_or_default() {
+            let Some(cid) = id_number(course.get("id")) else { continue };
+            let name = course.get("name").and_then(Value::as_str).unwrap_or("").to_string();
+            for a in self.assignments(cid, Some("upcoming")).unwrap_or_default() {
+                let id = a.get("id").map(|i| i.to_string().trim_matches('"').to_string()).unwrap_or_default();
+                if id.is_empty() || !known.insert(id) {
+                    continue;
+                }
+                let html_url = a.get("html_url").cloned().unwrap_or(Value::Null);
+                todo.push(json!({"type": "assignment", "context_name": name, "course_id": cid, "html_url": html_url, "assignment": a}));
+            }
+        }
         Ok(json!({"todo": todo, "upcoming_events": events}))
     }
 
@@ -853,6 +869,26 @@ pub(crate) mod tests {
         assert_eq!(id_number(Some(&json!("12"))), Some(12));
         assert_eq!(id_number(Some(&json!(12))), Some(12));
         assert_eq!(id_number(Some(&json!("x"))), None);
+    }
+
+    #[test]
+    fn upcoming_lists_every_upcoming_assignment_of_every_course() {
+        // Canvas's to-do feed is short; the course lists must fill in the rest, uncapped and
+        // without repeating what the to-do feed already had.
+        let many: Vec<String> = (1..=6).map(|i| format!(r#"{{"id":"{i}","course_id":"3","name":"과제{i}","due_at":"2026-12-0{i}T14:59:00Z","html_url":"https://c.example.com/courses/3/assignments/{i}","submission":{{"workflow_state":"unsubmitted"}}}}"#)).collect();
+        let (base, _rx) = mock_server_with(move |_| vec![
+            (200, vec![], r#"[{"type":"submitting","context_name":"열전달","course_id":"3","assignment":{"id":"1","course_id":"3","name":"과제1","due_at":"2026-12-01T14:59:00Z","submission":{"workflow_state":"unsubmitted"}}}]"#.to_string()),
+            (200, vec![], "[]".to_string()),
+            (200, vec![], r#"[{"id":3,"name":"열전달"}]"#.to_string()),
+            (200, vec![], format!("[{}]", many.join(","))),
+        ]);
+        let client = Client::for_test(&base, "tok");
+        let up = client.upcoming().unwrap();
+        let todo = up["todo"].as_array().unwrap();
+        assert_eq!(todo.len(), 6, "{up}");
+        let ids: std::collections::HashSet<String> = todo.iter().map(|t| t["assignment"]["id"].to_string()).collect();
+        assert_eq!(ids.len(), 6, "no duplicates");
+        assert!(todo.iter().all(|t| t["context_name"] == "열전달"));
     }
 
     #[test]

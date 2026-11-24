@@ -23,7 +23,7 @@ export default function CodexLogin({ compact = false }: { compact?: boolean }) {
   const { codex, login, loginError, startLogin, cancelLogin, connectCodex, refreshAccount, info, engine } = useApp();
   const [copied, setCopied] = useState(false);
 
-  if (engine.phase !== "idle") return <EngineProgress />;
+  if (engine.phase !== "idle" && !codex.account) return <EngineProgress />;
   if (codex.state === "starting") return <Spinner label="Codex 준비 중…" />;
   if (codex.state === "error") {
     return (

@@ -28,7 +28,7 @@ use tauri_plugin_opener::OpenerExt;
 
 /// The version shown in the app and used by the update check. Hotfix releases have 4 parts (0.3.2.1)
 /// while Cargo/Tauri stay on 3-part semver; package.json "releaseVersion" must equal this.
-pub const APP_VERSION: &str = "0.4.0.1";
+pub const APP_VERSION: &str = "0.4.1";
 pub const RELEASES_URL: &str = "https://github.com/sopo9880/canvas-assistant/releases";
 
 pub struct AppState {
@@ -86,6 +86,9 @@ async fn settings_save(state: Shared<'_>, patch: Value) -> Result<config::Settin
         }
         if let Some(v) = patch.get("canvasToolsInChat").and_then(Value::as_bool) {
             settings.canvas_tools_in_chat = v;
+        }
+        if let Some(v) = patch.get("engineAutoUpdate").and_then(Value::as_bool) {
+            settings.engine_auto_update = v;
         }
         if let Some(v) = patch.get("codexPath") {
             settings.codex_path = v.as_str().map(str::trim).filter(|p| !p.is_empty()).map(str::to_string);
@@ -620,6 +623,12 @@ fn engine_status_json(app: &AppHandle, data_dir: &std::path::Path) -> Value {
     v
 }
 
+/// True while an AI answer is being produced; auto-update waits for it to finish.
+#[tauri::command]
+fn codex_busy() -> bool {
+    codex::turn_in_progress()
+}
+
 #[tauri::command]
 fn engine_status(app: AppHandle, state: Shared<'_>) -> Value {
     engine_status_json(&app, &state.data_dir)
@@ -775,7 +784,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            app_info, settings_save, engine_status, engine_check, engine_install, engine_rollback, check_update, download_update, install_update, describe_files,
+            app_info, settings_save, engine_status, codex_busy, engine_check, engine_install, engine_rollback, check_update, download_update, install_update, describe_files,
             canvas_connect, canvas_disconnect, canvas_query, canvas_download,
             learningx_download,
             pending_list, pending_decide, canvas_action, pick_files, audit_list,

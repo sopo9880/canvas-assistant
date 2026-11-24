@@ -5,6 +5,7 @@ export type Settings = {
   closeToTray: boolean;
   notifications: boolean;
   codexPath: string | null;
+  engineAutoUpdate: boolean;
   defaultModel: string | null;
   defaultEffort: string | null;
   canvasToolsInChat: boolean;
@@ -81,6 +82,7 @@ export const api = {
     invoke<void>("jobs_update", { kind, enabled, intervalMin, params }),
   runJob: (kind: string) => invoke<void>("jobs_run_now", { kind }),
   briefings: () => invoke<Array<{ id: number; at: number; text: string }>>("briefings_list"),
+  codexBusy: () => invoke<boolean>("codex_busy"),
   engineStatus: () => invoke<EngineStatus>("engine_status"),
   engineCheck: () => invoke<{ latest: string; installed: string | null; newer: boolean }>("engine_check"),
   engineInstall: (target: "pinned" | "latest") => invoke<EngineStatus>("engine_install", { target }),

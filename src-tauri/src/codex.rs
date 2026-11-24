@@ -28,6 +28,30 @@ struct Running {
     pending: Arc<Mutex<Pending>>,
 }
 
+/// Turns started and not yet completed, with the time of the last Codex activity. Engine
+/// auto-update waits while a turn is running so it never cuts an answer off.
+static ACTIVE_TURNS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+static LAST_ACTIVITY_MS: AtomicU64 = AtomicU64::new(0);
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+fn turn_started() {
+    ACTIVE_TURNS.fetch_add(1, Ordering::SeqCst);
+    LAST_ACTIVITY_MS.store(now_ms(), Ordering::SeqCst);
+}
+
+fn turn_finished() {
+    let _ = ACTIVE_TURNS.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| Some((n - 1).max(0)));
+    LAST_ACTIVITY_MS.store(now_ms(), Ordering::SeqCst);
+}
+
+/// True while an AI answer is being produced (stale counts expire after 10 minutes of silence).
+pub fn turn_in_progress() -> bool {
+    ACTIVE_TURNS.load(Ordering::SeqCst) > 0 && now_ms().saturating_sub(LAST_ACTIVITY_MS.load(Ordering::SeqCst)) < 10 * 60 * 1000
+}
+
 #[derive(Default)]
 pub struct CodexState {
     current: Mutex<Option<Running>>,
@@ -428,6 +452,7 @@ impl CodexState {
     }
 
     pub fn stop(&self) {
+        ACTIVE_TURNS.store(0, Ordering::SeqCst);
         if let Ok(mut guard) = self.current.lock() {
             if let Some(mut running) = guard.take() {
                 let _ = running.child.kill();
@@ -503,6 +528,11 @@ impl CodexState {
                         }
                     }
                     (None, Some(name)) => {
+                        if name == "turn/completed" {
+                            turn_finished();
+                        } else if name.starts_with("item/") {
+                            LAST_ACTIVITY_MS.store(now_ms(), Ordering::SeqCst);
+                        }
                         let thread = message.pointer("/params/threadId").and_then(Value::as_str);
                         if let Some(thread) = thread {
                             if let Some(tx) = watchers.lock().ok().and_then(|w| w.get(thread).cloned()) {
@@ -569,7 +599,11 @@ impl CodexState {
         };
         let safe = validated_request_with_images(method, params, &workspace, mcp.as_ref(), &images)?;
         let timeout = if method == "thread/start" || method == "thread/resume" { Duration::from_secs(60) } else { Duration::from_secs(30) };
-        self.request_raw(method, safe, timeout)
+        let result = self.request_raw(method, safe, timeout);
+        if method == "turn/start" && result.is_ok() {
+            turn_started();
+        }
+        result
     }
 
     /// Starts an ephemeral thread with the Canvas tools, reports their startup status and
